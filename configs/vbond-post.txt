@@ -1,0 +1,10 @@
+config
+vpn 0
+interface ge0/0
+  tunnel-interface
+    encapsulation ipsec
+	  !
+   no shutdown
+	 !
+	!
+commit and-quit

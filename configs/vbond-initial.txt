@@ -1,0 +1,24 @@
+
+config
+system
+ host-name vbond
+ system-ip 1.1.1.2
+ site-id 1000
+ organization-name "DEFAULT - 155893"
+ vbond 51.51.51.2 local vbond-only
+!
+vpn 0
+ interface ge0/0
+  no tunnel-interface
+  ip address 51.51.51.2/24
+  no shutdown
+ !
+ ip route 0.0.0.0/0 51.51.51.254
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  no shutdown
+ !
+commit and-quit
+!

@@ -1,0 +1,23 @@
+
+config
+system
+ system-ip 1.1.1.3
+ site-id 1000
+ organization-name "DEFAULT - 155893"
+ vbond 51.51.51.2
+!
+vpn 0
+ no interface eth0
+ interface eth1
+  ip address 51.51.51.3/24
+  no shutdown
+ !
+ ip route 0.0.0.0/0 51.51.51.254
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  no shutdown
+ !
+commit and-quit
+!

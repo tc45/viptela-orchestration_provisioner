@@ -1,0 +1,9 @@
+
+	config
+	vpn 0
+	 interface eth1
+	  tunnel-interface
+	  no shutdown
+	!
+	commit and-quit
+

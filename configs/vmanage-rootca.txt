@@ -1,0 +1,8 @@
+
+vshell
+
+openssl genrsa -out ROOTCA.key 2048
+
+openssl req -x509 -new -nodes -key ROOTCA.key -sha256 -days 2000 \
+    -subj "/C=US/ST=AZ/L=PHX/O=testlab/CN=vmanage.lab" \
+    -out ROOTCA.pem
