@@ -243,8 +243,12 @@ def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
         wait_string_str = wait_string.decode()
     else:
         wait_string_str = wait_string
-        wait_string = b'' + wait_string
 
+    print(message)
+    print('Maximum timeout: ' + str(max_time))
+    print('Poll interval: ' + str(interval))
+    print('', end='\r')
+    print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
     # Check to see if max timer has expired
     while max_time > 0:
         if max_time - interval < 0:
@@ -266,10 +270,9 @@ def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
             time_delta = time_delta - int(minutes) * 60
 
         seconds = format_time(time_delta)
-
-        print(message, end='\r')
-        print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds))
-    print('Time has elapsed on the wait timer function.')
+        print('', end='\r')
+        print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
+    print('\nTime has elapsed on the wait timer function.')
     return False
 
 
