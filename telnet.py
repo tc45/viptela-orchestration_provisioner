@@ -1,8 +1,32 @@
 from pythonping import ping
 import telnetlib
-import time
+import time, datetime
 from tabulate import tabulate
 import re
+from threading import Thread, currentThread
+import threading
+# from classes import multi_threading
+from utils import ping_host
+
+
+class myThread (threading.Thread):
+
+    def __init__(self, name, counter, device, target=None):
+        threading.Thread.__init__(self)
+        self.threadID = counter
+        self.name = name
+        self.counter = counter
+        self.target = target
+        self.device = device
+
+    def run(self):
+        print("\nStarting " + self.name)
+        #counter(self.name, self.counter)
+        configure_viptela_pod(self.device, self.name, self.counter)
+        print("Exiting " + self.name)
+
+
+
 
 HOST = '172.28.43.171'
 user = 'admin'
@@ -17,47 +41,203 @@ DEBUG = True
 vManage2 = {
     'name': 'vmanage',
     'port': '32793',
+    'console_host': '',
     'username': 'admin',
     'password': 'admin',
     'preferred_password': 'insight',
     'vpn0_ip': '51.51.51.5',
     'is_configured': False,
     'initial_config_file': 'configs/vmanage2-initial.txt',
+    'thread_header': '',
 }
 vSmart = {
     'name': 'vsmart',
     'port': '32771',
+    'console_host': '',
     'username': 'admin',
     'password': 'admin',
     'preferred_password': 'insight',
     'vpn0_ip': '51.51.51.3',
     'is_configured': False,
     'initial_config_file': 'configs/vsmart-initial.txt',
+    'thread_header': '',
 }
 vBond = {
     'name': 'vbond',
     'port': '32770',
+    'console_host': '',
     'username': 'admin',
     'password': 'admin',
     'preferred_password': 'insight',
     'vpn0_ip': '51.51.51.2',
     'is_configured': False,
     'initial_config_file': 'configs/vbond-initial.txt',
+    'thread_header': '',
 }
 vManage = {
     'name': 'vmanage',
     'port': '32769',
+    'console_host': '',
     'username': 'admin',
     'password': 'admin',
     'preferred_password': 'insight',
     'vpn0_ip': '51.51.51.1',
     'is_configured': False,
     'initial_config_file': 'configs/vmanage-initial.txt',
+    'thread_header': '',
 }
 
 v_devices = [vManage, vManage2, vSmart, vBond]
 
+for device in v_devices:
+    device['console_host'] = HOST
+
 device_details = []
+
+
+def main():
+    global ALL_COMPLETE
+
+    tabulate_devices()
+
+    # threads_test()
+
+    while not ALL_COMPLETE:
+        threads2()
+
+        track_configured = 0
+        for device in v_devices:
+            if device['is_configured']:
+                track_configured += 1
+
+        tabulate_device_status()
+
+        if track_configured == len(v_devices):
+            ALL_COMPLETE = True
+    print('All devices configured.  Login to vManage using the MGMT interface IP: PLACEHOLDER') # TODO: Add MGMT IF IP after configuration
+
+
+def threads():
+    if DEBUG:
+        print('THREADS: Starting multithreading.')
+    threads = []
+    for device in v_devices:
+        if not device['is_configured']:
+            if DEBUG:
+                print('THREADS: Starting thread for ' + device['name'])
+            th = Thread(
+                name=device['name'] + '-' + device['port'],
+                target=configure_viptela_pod(device)
+            )
+            th.start()
+            threads.append(th)
+
+        # Wait for all threads to finish
+        for th in threads:
+            th.join()
+
+
+def threads_test():
+    my_list = ['a', 'b', 'c', 'd', 'e', 'f', '1', '2']
+    x = 1
+    threads = []
+    for item in my_list:
+        print('Starting thread for ' + item)
+        new_thread = myThread(item, x, counter(item, x))
+        new_thread.start()
+        threads.append(new_thread)
+        x += 1
+
+    # Wait for all threads to finish
+    for th in threads:
+        th.join()
+    new_thread.join()
+
+
+def counter(threadName, counter):
+    import time
+
+    x = 0
+    while x < 5:
+        datefields = []
+        today = datetime.date.today()
+        datefields.append(today)
+        print("{}[{}]: {} - {}".format( threadName, counter, datefields[0], x))
+        time.sleep(2)
+        x += 1
+
+
+def threads2():
+    if DEBUG:
+        print('THREADS: Starting multithreading.')
+    threads = []
+    x = 1
+    for device in v_devices:
+        if not device['is_configured']:
+            device['thread_header'] = device['name'] + '[' + str(x) + ']' + ': '
+            display_name = device['name'] + ':' + device['port']
+            if DEBUG:
+                print('THREADS: Starting thread for ' +
+                      device['name'] + ' (' + HOST + ':' +
+                      device['port'] + ') - counter: ' + str(x))
+
+            new_thread = myThread(display_name, x, device)
+            new_thread.start()
+            threads.append(new_thread)
+            x += 1
+
+    # Wait for all threads to finish
+    for th in threads:
+        th.join()
+    new_thread.join()
+
+
+def configure_viptela_pod(device, thread_name, counter):
+    # If device key for is_configured is set to False:
+    # Ping the device VPN0 ip.  If it responds, mark as configured.
+    # If it does not respond, continue with configuration.
+    while not device['is_configured']:
+        if ping_host(device['vpn0_ip']):
+            print(device['thread_header'] + device['name'] + '(' +
+                  device['vpn0_ip'] +
+                  ') is active!')
+            device['is_configured'] = True
+        else:
+            print(device['thread_header'] + device['name'] + '(' +
+                  device['vpn0_ip'] +
+                  ') is NOT active.  Attempting to configure.')
+            config = open(device['initial_config_file'], 'r')
+            config_lines = config.readlines()
+            try:
+                if DEBUG:
+                    print(device['thread_header'] + 'Launching telnet session to ' + HOST + ':' + device['port'])
+                tn = telnetlib.Telnet(HOST, device['port'])
+                if DEBUG:
+                    print(device['thread_header'] + 'Logging into ' + HOST + ':' + device['port'])
+                successful, telnet_idx, telnet_obj, telnet_output = login2(tn, device)
+                if device['name'] == 'vmanage' and not device['is_configured']:
+                    if DEBUG:
+                        print(device['thread_header'] + 'Pre-configuring vManage.  This process will take 15-30 minutes')
+                    pre_config_completed = pre_config_vmanage(tn, telnet_idx, telnet_obj, telnet_output)
+                    if pre_config_completed:
+                        successful = login2(tn, device)
+                if successful:
+                    print(device['thread_header'] + 'Successfully pre-configured vManage.  Moving onto general configuration.')
+                    write_config(tn, device, config_lines)
+                print(device['thread_header'] + 'MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
+                if tn.sock:
+                    tn.close()
+                    print(device['thread_header'] + 'MAIN: Closing telnet connection for device ' + device['name'])
+                else:
+                    print(device['thread_header'] + 'MAIN: Closing telnet connection for device ' + device['name'])
+
+            except ConnectionRefusedError as error:
+                print(device['thread_header'] + 'Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
+            except BrokenPipeError as error:
+                print(device['thread_header'] + 'Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
+            except EOFError as error:
+                print(device['thread_header'] + 'Connection to host was lost: ' + HOST)
+            time.sleep(30)
 
 
 def login2(telnet_obj, device):
@@ -90,18 +270,19 @@ def login2(telnet_obj, device):
         # Search for more complicated patterns that are not working right with telnet expect
         if re.search('System Initializing. Please wait to login...', s) is not None:
             #telnet_obj.write(b'\n')
-            print('LOGIN: INITIALIZE: vManage is still initializing.  Waiting up to 180 seconds for system to be ready before trying again.')
+            print(device['thread_header'] + 'LOGIN: INITIALIZE: vManage is still initializing.  Waiting up to 180 seconds for system to be ready before trying again.')
             return_val = telnet_obj.read_until(b'System Ready', timeout=180)
             if return_val is not b' ':
                 time.sleep(3)
                 completed_login = False
-                print('LOGIN: INITIALIZE: vManage is Ready. Logging in now.')
+                print(device['thread_header'] + 'LOGIN: INITIALIZE: vManage is Ready. Logging in now.')
                 telnet_obj.write(b'\n')
                 while not completed_login:
                     idxx, objx, outputx = telnet_obj.expect(prompts, 5)
                     if idxx == 0:
                         if DEBUG:
                             print(
+                                device['thread_header'] +
                                 'LOGIN: INITIALIZE: Sending username ' + device['username'] + '.'
                             )
                         telnet_obj.write(device['username'].encode('ascii') + b"\n")
@@ -109,6 +290,7 @@ def login2(telnet_obj, device):
                         telnet_obj.read_until(b'Password:', 20)
                         if DEBUG:
                             print(
+                                device['thread_header'] +
                                 'LOGIN: INITIALIZE: Sending password ' + device['password'] + '.'
                             )
                         telnet_obj.write(device['password'].encode('ascii') + b"\n")
@@ -125,6 +307,7 @@ def login2(telnet_obj, device):
                         save_output = outputx
                         if DEBUG:
                             print(
+                                device['thread_header'] +
                                 'LOGIN: INITIALIZE: Login complete.  Exiting loop.'
                             )
                         completed_login = True
@@ -132,7 +315,7 @@ def login2(telnet_obj, device):
                         telnet_obj.write(b'\n')
         elif re.search('Login incorrect', s) is not None:
             track_incorrect += 1
-            print('LOGIN: LOGIN_INCORRECT: Incorrect Logins: ' + str(track_incorrect))
+            print(device['thread_header'] + 'LOGIN: LOGIN_INCORRECT: Incorrect Logins: ' + str(track_incorrect))
             # If incorrect password, save telnet object info and send back to top of the loop.
             # The 'login:' prompt exists in the output and we need to key on it without sending CR
             save_idx = idx
@@ -141,23 +324,29 @@ def login2(telnet_obj, device):
         # if pattern matches initial password or idx == 6, do the following:
         elif re.search('You must set an initial admin password', s) is not None or idx == 5:
             if DEBUG:
-                print('LOGIN: SET_PASS: Setting initial admin passwords')
+                print(device['thread_header'] + 'LOGIN: SET_PASS: Setting initial admin passwords')
             # If initial setup prompted, send new password.
             match_passwords(telnet_obj, device, device['preferred_password'])
             x = 1
         # If login prompt found, send username followed by password
         elif idx == 0:
             if DEBUG:
-                print('LOGIN: Pattern matched: ' + obj.re.pattern.decode(
-                    'utf-8') + '.  Found login prompt.  Sending username ' + device['username'])
+                print(device['thread_header'] +
+                      'LOGIN: Pattern matched: ' + obj.re.pattern.decode('utf-8') +
+                      '.  Found login prompt.  Sending username ' +
+                      device['username']
+                )
             telnet_obj.write(device['username'].encode('ascii') + b"\n")
             login_typed = True
             login_found = True
         elif idx == 3:
             if login_typed:
                 if DEBUG:
-                    print('LOGIN: Pattern matched: ' + obj.re.pattern.decode(
-                        'utf-8') + '.  Sending password ' + device['password'])
+                    print(device['thread_header'] +
+                          'LOGIN: Pattern matched: ' +
+                          obj.re.pattern.decode('utf-8') +
+                          '.  Sending password ' + device['password']
+                          )
                 telnet_obj.write(device['password'].encode('ascii') + b"\n")
                 login_typed = False
             else:
@@ -168,29 +357,29 @@ def login2(telnet_obj, device):
         elif idx == 1 or idx == 2:
             if DEBUG:
                 print(
-                    'LOGIN: Found privilege prompt.  Exiting function.'
+                    device['thread_header'] + 'LOGIN: Found privilege prompt.  Exiting function.'
                 )
             return True, idx, obj, output
         # Found storage device prompt.  Exiting function.
         elif idx == 4:
             if DEBUG:
                 print(
-                    'LOGIN: Found storage device prompt.  Exiting function.'
+                    device['thread_header'] + 'LOGIN: Found storage device prompt.  Exiting function.'
                 )
             return True, idx, obj, output
         else:
             if login_found:
                 track_loops += 1
                 if track_loops >= 3 and login_found:
-                    print('Something is wrong with the loop')
+                    print(device['thread_header'] + 'Something is wrong with the loop')
             telnet_obj.write(b'\n')
             if DEBUG:
-                print('LOGIN: Login prompt not found.  Looping function.')
+                print(device['thread_header'] + 'LOGIN: Login prompt not found.  Looping function.')
 
         if track_incorrect == 2:
             device['password'] = device['preferred_password']
             if DEBUG:
-                print('Incorrect password 2 times.  Updating password to preferred password: ' +
+                print(device['thread_header'] + 'Incorrect password 2 times.  Updating password to preferred password: ' +
                       device['preferred_password'])
 
 
@@ -212,18 +401,18 @@ def match_passwords(telnet_obj, device, new_password):
 
         if idx == 0:
             if DEBUG:
-                print("Passwords don't match. Try again.")
+                print(device['thread_header'] + "Passwords don't match. Try again.")
         else:
             device['password'] = device['preferred_password']
 
         # Finish checking for matches.
         if idx == 1:
             if DEBUG:
-                print("Passwords matched and were accepted.  Continuing")
+                print(device['thread_header'] + "Passwords matched and were accepted.  Continuing")
             passwords_match = True
         elif idx == 2:
             if DEBUG:
-                print("Passwords matched and were accepted.  Prompt for vmanage pre-config.")
+                print(device['thread_header'] + "Passwords matched and were accepted.  Prompt for vmanage pre-config.")
             passwords_match = True
     return True
 
@@ -239,7 +428,7 @@ def format_time(input):
     return output
 
 
-def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
+def wait_timer(message, telnet_obj, device, wait_string, interval=30, max_time=3600):
     start_time = time.time()
     time_delta = 0
     hours = '00'
@@ -254,10 +443,10 @@ def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
         wait_string_str = wait_string
 
     print(message)
-    print('Maximum timeout: ' + str(max_time))
-    print('Poll interval: ' + str(interval))
+    print(device['thread_header'] + 'Maximum timeout: ' + str(max_time))
+    print(device['thread_header'] + 'Poll interval: ' + str(interval))
     print('', end='\r')
-    print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
+    print(device['thread_header'] + 'Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
     # Check to see if max timer has expired
     while max_time > 0:
         if max_time - interval < 0:
@@ -280,8 +469,8 @@ def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
 
         seconds = format_time(time_delta)
         print('', end='\r')
-        print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
-    print('\nTime has elapsed on the wait timer function.')
+        print(device['thread_header'] + 'Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
+    print('\n' + device['thread_header'] + 'Time has elapsed on the wait timer function.')
     return False
 
 
@@ -308,36 +497,37 @@ def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
 
         s = output.decode()
         if DEBUG:
-            print('Looping through pre_config for vManage')
+            print(device['thread_header'] + 'Looping through pre_config for vManage')
         # If privelege prompt exists, exit this function and return False to parent.
         if idx == 5:
             return False
 
         if re.search('Would you like to format vdb?', s):
             if DEBUG:
-                print('Pattern matched for formatting vdb: Responding with ''y''.')
+                print(device['thread_header'] + 'Pattern matched for formatting vdb: Responding with ''y''.')
             telnet_obj.write(b'y\n')
             # Reboot will take 30+ minutes to complete.  Set timer at 40 minutes and watch for 'System Ready' message
-            print('PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  '
+            print(device['thread_header'] +
+                  'PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  '
                   'This process could take from between 10 and 60 minutes.')
 
             timer_response = wait_timer('Waiting for vManage to start reboot.  DO NOT SHUT DOWN VMANAGE.',
-                       telnet_obj, b'Restarting system', 5, 1200)
+                       telnet_obj, device, b'Restarting system', 5, 1200)
             if timer_response:
-                print('\nPRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting')
+                print('\n' + device['thread_header'] + 'PRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting')
             else:
-                print('PRE-CONFIG:VMANAGE:FAILURE: vManage reboot is not starting as expected.')
+                print(device['thread_header'] + 'PRE-CONFIG:VMANAGE:FAILURE: vManage reboot is not starting as expected.')
 
             timer_response = wait_timer('Waiting for vManage to build HDD and reboot.  DO NOT SHUT DOWN VMANAGE.',
-                       telnet_obj, b'System Ready', 5)
+                       telnet_obj, device, b'System Ready', 5)
             if timer_response:
-                print('\nPRE-CONFIG:VMANAGE:SUCCESS: HDD Build on vManage is complete.  Continuing with configuration.')
+                print('\n' + device['thread_header'] + 'PRE-CONFIG:VMANAGE:SUCCESS: HDD Build on vManage is complete.  Continuing with configuration.')
             else:
-                print('\nPRE-CONFIG:VMANAGE:FAILURE: Investigate HDD configuration with vManage.')
+                print('\n' + device['thread_header'] + 'PRE-CONFIG:VMANAGE:FAILURE: Investigate HDD configuration with vManage.')
             return True
         elif re.search('Select storage device to use:', s):
             if DEBUG:
-                print('Pattern matched for selecting device: Selected vdb as storage device.')
+                print(device['thread_header'] + 'Pattern matched for selecting device: Selected vdb as storage device.')
             telnet_obj.write(b"1\n")
             time.sleep(2)
         else:
@@ -362,15 +552,19 @@ def write_config(telnet_obj, device, config):
         idx, obj, output = telnet_obj.expect(prompts, 5)
         if idx == 0 or idx == 1:
             # TODO: Finish this part up.
-            print('WRITE_CONFIG: Beginning to send commands.')
+            print(device['thread_header'] + 'WRITE_CONFIG: Beginning to send commands.')
             for line in config:
                 telnet_obj.write(line.encode())
             output = telnet_obj.expect(prompts, 60)
             if output is not b'':
                 print('WRITE_CONFIG: Finished sending commands.  Leaving function.')
                 is_config_applied = True
+                i = max_retry + 1
             else:
-                print('WRITE_CONFIG: Error sending commands.  Trying again.')
+                print(device['thread_header'] + 'WRITE_CONFIG: Error sending commands.  Trying again.')
+                i += 1
+                time.sleep(5)
+
     return True
 
 
@@ -399,71 +593,8 @@ def tabulate_device_status():
     print(tabulate(status, headers=['DEVICE', 'VPN0 IP', 'STATUS'], tablefmt="pretty"))
 
 
-def ping_host(ip, count=1):
-    response = ping(ip, count)
-    if (count - response.packets_lost) > 0:
-        return True
 
 
-def main():
-    global ALL_COMPLETE
-
-    tabulate_devices()
-
-    while not ALL_COMPLETE:
-        for device in v_devices:
-            # If device key for is_configured is set to False:
-            # Ping the device VPN0 ip.  If it responds, mark as configured.
-            # If it does not respond, continue with configuration.
-            if not device['is_configured']:
-                if ping_host(device['vpn0_ip']):
-                    print(device['name'] + '(' +
-                          device['vpn0_ip'] +
-                          ') is active!')
-                    device['is_configured'] = True
-                else:
-                    print(device['name'] + '(' +
-                          device['vpn0_ip'] +
-                          ') is NOT active.  Attempting to configure.')
-                    config = open(device['initial_config_file'], 'r')
-                    config_lines = config.readlines()
-                    try:
-                        if DEBUG:
-                            print('Launching telnet session to ' + HOST + ':' + device['port'])
-                        tn = telnetlib.Telnet(HOST, device['port'])
-                        if DEBUG:
-                            print('Logging into ' + HOST + ':' + device['port'])
-                        successful, telnet_idx, telnet_obj, telnet_output = login2(tn, device)
-                        if device['name'] == 'vmanage' and not device['is_configured']:
-                            if DEBUG:
-                                print('Pre-configuring vManage.  This process will take 15-30 minutes')
-                            pre_config_completed = pre_config_vmanage(tn, telnet_idx, telnet_obj, telnet_output)
-                            if pre_config_completed:
-
-                                successful = login2(tn, device)
-                        if successful:
-                            print('Successfully pre-configured vManage.  Moving onto general configuration.')
-                            write_config(tn, device, config_lines)
-                        print('MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
-                        print(tn.read_all())
-                        tn.close()
-                    except ConnectionRefusedError as error:
-                        print('Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
-                    except BrokenPipeError as error:
-                        print('Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
-                    except EOFError as error:
-                        print('Connection to host was lost: ' + HOST)
-        time.sleep(5)
-        track_configured = 0
-        for device in v_devices:
-            if device['is_configured']:
-                track_configured += 1
-
-        tabulate_device_status()
-
-        if track_configured == len(v_devices):
-            ALL_COMPLETE = True
-    print('All devices configured.  Login to vManage using the MGMT interface IP: PLACEHOLDER') # TODO: Add MGMT IF IP after configuration
 
 
 main()
