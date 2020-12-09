@@ -14,6 +14,16 @@ DEBUG = True
 
 # Create vManage, vBond, and vSmart objects.  Associate default configuration files with each object.  Add to list.
 
+vManage2 = {
+    'name': 'vmanage',
+    'port': '32793',
+    'username': 'admin',
+    'password': 'admin',
+    'preferred_password': 'insight',
+    'vpn0_ip': '51.51.51.5',
+    'is_configured': False,
+    'initial_config_file': 'configs/vmanage2-initial.txt',
+}
 vSmart = {
     'name': 'vsmart',
     'port': '32771',
@@ -45,8 +55,7 @@ vManage = {
     'initial_config_file': 'configs/vmanage-initial.txt',
 }
 
-v_devices = [vManage, vSmart, vBond]
-
+v_devices = [vManage, vManage2, vSmart, vBond]
 
 device_details = []
 
@@ -309,27 +318,22 @@ def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
                 print('Pattern matched for formatting vdb: Responding with ''y''.')
             telnet_obj.write(b'y\n')
             # Reboot will take 30+ minutes to complete.  Set timer at 40 minutes and watch for 'System Ready' message
-            reboot_complete = False
-            start_time = time.time()
-            time_remaining = 2400
-            sleep_interval = 30
             print('PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  '
-                  'This process could take from between 5 and 35 minutes.')
+                  'This process could take from between 10 and 60 minutes.')
 
             timer_response = wait_timer('Waiting for vManage to start reboot.  DO NOT SHUT DOWN VMANAGE.',
-                       telnet_obj, b'Restarting system', 5, 600)
+                       telnet_obj, b'Restarting system', 5, 1200)
             if timer_response:
-                print('PRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting')
+                print('\nPRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting')
             else:
                 print('PRE-CONFIG:VMANAGE:FAILURE: vManage reboot is not starting as expected.')
 
             timer_response = wait_timer('Waiting for vManage to build HDD and reboot.  DO NOT SHUT DOWN VMANAGE.',
                        telnet_obj, b'System Ready', 5)
-
             if timer_response:
-                print('PRE-CONFIG:VMANAGE:SUCCESS: HDD Build on vManage is complete.  Continuing with configuration.')
+                print('\nPRE-CONFIG:VMANAGE:SUCCESS: HDD Build on vManage is complete.  Continuing with configuration.')
             else:
-                print('PRE-CONFIG:VMANAGE:FAILURE: Investigate HDD configuration with vManage.')
+                print('\nPRE-CONFIG:VMANAGE:FAILURE: Investigate HDD configuration with vManage.')
             return True
         elif re.search('Select storage device to use:', s):
             if DEBUG:
@@ -350,16 +354,24 @@ def write_config(telnet_obj, device, config):
 
     is_config_applied = device['is_configured']
 
-    while not is_config_applied:
+    max_retry = 3
+    i = 0
+
+    while i <= max_retry:
         telnet_obj.write(b"\n")
         idx, obj, output = telnet_obj.expect(prompts, 5)
         if idx == 0 or idx == 1:
             # TODO: Finish this part up.
-            print('Logged in.  Beginning to send commands.')
+            print('WRITE_CONFIG: Beginning to send commands.')
             for line in config:
                 telnet_obj.write(line.encode())
-            telnet_obj.expect(prompts, 60)
-            return True
+            output = telnet_obj.expect(prompts, 60)
+            if output is not b'':
+                print('WRITE_CONFIG: Finished sending commands.  Leaving function.')
+                is_config_applied = True
+            else:
+                print('WRITE_CONFIG: Error sending commands.  Trying again.')
+    return True
 
 
 def tabulate_devices():
@@ -370,6 +382,21 @@ def tabulate_devices():
     print('\nThe following default values will be used to initial provision the Viptela POD.\n')
     print(tabulate(device_details, headers=['DEVICE', 'HOST', 'PORT'], tablefmt="pretty"))
     # response = input('Would you like to make changes to these values [y/n]') or 'n'
+
+
+def tabulate_device_status():
+    status = []
+    for device in v_devices:
+        is_configured = ""
+        if device['is_configured']:
+            is_configured = 'Complete'
+        else:
+            is_configured = 'Pending'
+        details = [device['name'], device['vpn0_ip'], is_configured]
+        status.append(details)
+
+    print('\nViptela Provisioning - Current Status.\n')
+    print(tabulate(status, headers=['DEVICE', 'VPN0 IP', 'STATUS'], tablefmt="pretty"))
 
 
 def ping_host(ip, count=1):
@@ -390,23 +417,22 @@ def main():
             # If it does not respond, continue with configuration.
             if not device['is_configured']:
                 if ping_host(device['vpn0_ip']):
-                    print(device['name'] + ' is active!')
+                    print(device['name'] + '(' +
+                          device['vpn0_ip'] +
+                          ') is active!')
                     device['is_configured'] = True
                 else:
                     print(device['name'] + '(' +
                           device['vpn0_ip'] +
-                          'is NOT active.  Attempting to configure.')
-                    # print(response)
+                          ') is NOT active.  Attempting to configure.')
                     config = open(device['initial_config_file'], 'r')
                     config_lines = config.readlines()
                     try:
                         if DEBUG:
                             print('Launching telnet session to ' + HOST + ':' + device['port'])
                         tn = telnetlib.Telnet(HOST, device['port'])
-                        # tn.write(b'exit\n')
                         if DEBUG:
                             print('Logging into ' + HOST + ':' + device['port'])
-                        # telnet_obj, telnet_output = login_telnet(tn, device)
                         successful, telnet_idx, telnet_obj, telnet_output = login2(tn, device)
                         if device['name'] == 'vmanage' and not device['is_configured']:
                             if DEBUG:
@@ -417,26 +443,23 @@ def main():
                                 successful = login2(tn, device)
                         if successful:
                             print('Successfully pre-configured vManage.  Moving onto general configuration.')
-                            #login_telnet(tn, device)
                             write_config(tn, device, config_lines)
+                        print('MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
                         print(tn.read_all())
+                        tn.close()
                     except ConnectionRefusedError as error:
                         print('Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
                     except BrokenPipeError as error:
                         print('Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
                     except EOFError as error:
                         print('Connection to host was lost: ' + HOST)
-                    tn.close()
         time.sleep(5)
         track_configured = 0
         for device in v_devices:
             if device['is_configured']:
                 track_configured += 1
 
-        print(60 * '*')
-        print(str(track_configured) + ' out of ' + str(len(v_devices)) + ' Viptela device configurations completed.')
-        print(60 * '*')
-        print('\n')
+        tabulate_device_status()
 
         if track_configured == len(v_devices):
             ALL_COMPLETE = True
