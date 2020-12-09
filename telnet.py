@@ -238,12 +238,23 @@ def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
     seconds = '00'
     beginning_max_time = max_time
 
+    wait_string_str = ''
+    if isinstance(wait_string, bytes):
+        wait_string_str = wait_string.decode()
+    else:
+        wait_string_str = wait_string
+        wait_string = b'' + wait_string
+
     # Check to see if max timer has expired
     while max_time > 0:
         if max_time - interval < 0:
             interval = max_time
         max_time = beginning_max_time
         output = telnet_obj.read_until(wait_string, interval)
+        s = output.decode()
+        if re.search(wait_string_str, s) is not None:
+            max_time = 0
+            return True
         now_time = time.time()
         time_delta = int(now_time - start_time)
         max_time = max_time - time_delta
@@ -256,9 +267,10 @@ def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
 
         seconds = format_time(time_delta)
 
-        print(message)
+        print(message, end='\r')
         print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds))
-    print('Time has elapsed on the wait_timer function.')
+    print('Time has elapsed on the wait timer function.')
+    return False
 
 
 def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
@@ -291,19 +303,30 @@ def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
 
         if re.search('Would you like to format vdb?', s):
             if DEBUG:
-                print('Pattern matched for selecting device: Selected vdb as storage device.')
-            telnet_obj.write(b"y\n")
+                print('Pattern matched for formatting vdb: Responding with ''y''.')
+            telnet_obj.write(b'y\n')
             # Reboot will take 30+ minutes to complete.  Set timer at 40 minutes and watch for 'System Ready' message
             reboot_complete = False
             start_time = time.time()
             time_remaining = 2400
             sleep_interval = 30
-            print('PRE-CONFIG:VMANAGE: Beginning reboot.  This could take between 5 and 20 minutes.')
+            print('PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  '
+                  'This process could take from between 5 and 35 minutes.')
 
-            wait_timer('Waiting for vManage to build HDD and reboot.  DO NOT SHUT DOWN VMANAGE.',
-                       telnet_obj, b'System Ready', 30)
+            timer_response = wait_timer('Waiting for vManage to start reboot.  DO NOT SHUT DOWN VMANAGE.',
+                       telnet_obj, b'Restarting system', 5, 600)
+            if timer_response:
+                print('PRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting')
+            else:
+                print('PRE-CONFIG:VMANAGE:FAILURE: vManage reboot is not starting as expected.')
 
-            print('HDD Build on vManage is complete.  Continuing with configuration.')
+            timer_response = wait_timer('Waiting for vManage to build HDD and reboot.  DO NOT SHUT DOWN VMANAGE.',
+                       telnet_obj, b'System Ready', 5)
+
+            if timer_response:
+                print('PRE-CONFIG:VMANAGE:SUCCESS: HDD Build on vManage is complete.  Continuing with configuration.')
+            else:
+                print('PRE-CONFIG:VMANAGE:FAILURE: Investigate HDD configuration with vManage.')
             return True
         elif re.search('Select storage device to use:', s):
             if DEBUG:
@@ -333,8 +356,7 @@ def write_config(telnet_obj, device, config):
             for line in config:
                 telnet_obj.write(line.encode())
             telnet_obj.expect(prompts, 60)
-            telnet_obj.write(b'\n')
-            telnet_obj.expect(prompts, 5)
+            return True
 
 
 def tabulate_devices():
@@ -368,7 +390,9 @@ def main():
                     print(device['name'] + ' is active!')
                     device['is_configured'] = True
                 else:
-                    print(device['name'] + ' is NOT active.  Attempting to configure.')
+                    print(device['name'] + '(' +
+                          device['vpn0_ip'] +
+                          'is NOT active.  Attempting to configure.')
                     # print(response)
                     config = open(device['initial_config_file'], 'r')
                     config_lines = config.readlines()
@@ -397,7 +421,9 @@ def main():
                         print('Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
                     except BrokenPipeError as error:
                         print('Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
-
+                    except EOFError as error:
+                        print('Connection to host was lost: ' + HOST)
+                    tn.close()
         time.sleep(5)
         track_configured = 0
         for device in v_devices:
