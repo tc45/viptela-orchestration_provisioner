@@ -57,71 +57,135 @@ def login2(telnet_obj, device):
         device['name'].encode('utf-8') + b'#',      # 1
         'vedge'.encode('utf-8') + b'#',             # 2
         b'Password:',                               # 3
-        b'Welcome to Viptela CLI',                  # 4
-        b'Select storage device to use:',           # 5
+        b'Select storage device to use:',           # 4
+        b'You must set an initial admin password',  # 5
     ]
 
     track_incorrect = 0
+    save_idx, save_obj, save_output = None, None, None
+    login_typed = False
+    track_loops = 0
+    login_found = False
 
     while True:
-        time.sleep(5)
-        idx, obj, output = telnet_obj.expect(prompts, 5)
+        idx, obj, output = None, None, None
+        if save_idx is None:
+            time.sleep(5)
+            idx, obj, output = telnet_obj.expect(prompts, 5)
+        else:
+            # If values found outside of while loop, accept those values and reset outside variables
+            idx, obj, output = save_idx, save_obj, save_output
+            save_idx, save_obj, save_output = None, None, None
         s = output.decode()
 
         # Search for more complicated patterns that are not working right with telnet expect
-        # if re.search('You must set an initial admin password.\r\r\nPassword:', s) is not None:
-        #     # If initial setup prompted, send new password.
-        #     telnet_obj.write(device['preferred_password'].encode('ascii') + b'\n')
         if re.search('System Initializing. Please wait to login...', s) is not None:
-            print("In this function now.")
             #telnet_obj.write(b'\n')
-            if DEBUG:
-                print('vManage is still initializing.  Waiting up to 180 seconds for system to be ready before trying again.')
+            print('LOGIN: INITIALIZE: vManage is still initializing.  Waiting up to 180 seconds for system to be ready before trying again.')
             return_val = telnet_obj.read_until(b'System Ready', timeout=180)
             if return_val is not b' ':
                 time.sleep(3)
-                print('vManage is Ready. Logging in now.')
+                completed_login = False
+                print('LOGIN: INITIALIZE: vManage is Ready. Logging in now.')
                 telnet_obj.write(b'\n')
-                telnet_obj.write(device['username'].encode('ascii') + b"\n")
-                time.sleep(5)
-                telnet_obj.write(device['password'].encode('ascii') + b"\n")
+                while not completed_login:
+                    idxx, objx, outputx = telnet_obj.expect(prompts, 5)
+                    if idxx == 0:
+                        if DEBUG:
+                            print(
+                                'LOGIN: INITIALIZE: Sending username ' + device['username'] + '.'
+                            )
+                        telnet_obj.write(device['username'].encode('ascii') + b"\n")
+                        # Wait up to 20 seconds for the password prompt.
+                        telnet_obj.read_until(b'Password:', 20)
+                        if DEBUG:
+                            print(
+                                'LOGIN: INITIALIZE: Sending password ' + device['password'] + '.'
+                            )
+                        telnet_obj.write(device['password'].encode('ascii') + b"\n")
+                        idxx, objx, outputx = telnet_obj.expect(prompts, 5)
+                        sx = outputx.decode()
+
+                        # Search for more complicated patterns that are not working right with telnet expect
+                        if re.search('Login incorrect', sx) is not None:
+                            # if login incorrect found, increment tracker to change password faster
+                            # and pass telnet_object data to top of loop
+                            track_incorrect += 1
+                        save_idx = idxx
+                        save_obj = objx
+                        save_output = outputx
+                        if DEBUG:
+                            print(
+                                'LOGIN: INITIALIZE: Login complete.  Exiting loop.'
+                            )
+                        completed_login = True
+                    elif idxx == 3:
+                        telnet_obj.write(b'\n')
         elif re.search('Login incorrect', s) is not None:
             track_incorrect += 1
-            print('Incorrect Logins: ' + str(track_incorrect))
-        elif re.search('You must set an initial admin password', s) is not None:
+            print('LOGIN: LOGIN_INCORRECT: Incorrect Logins: ' + str(track_incorrect))
+            # If incorrect password, save telnet object info and send back to top of the loop.
+            # The 'login:' prompt exists in the output and we need to key on it without sending CR
+            save_idx = idx
+            save_obj = obj
+            save_output = b'login:'
+        # if pattern matches initial password or idx == 6, do the following:
+        elif re.search('You must set an initial admin password', s) is not None or idx == 5:
             if DEBUG:
-                print('Setting initial admin passwords')
+                print('LOGIN: SET_PASS: Setting initial admin passwords')
             # If initial setup prompted, send new password.
-            match_passwords(telnet_obj, device['preferred_password'])
-            return True
+            match_passwords(telnet_obj, device, device['preferred_password'])
+            x = 1
         # If login prompt found, send username followed by password
         elif idx == 0:
             if DEBUG:
-                print('- Pattern matched: ' + obj.re.pattern.decode(
+                print('LOGIN: Pattern matched: ' + obj.re.pattern.decode(
                     'utf-8') + '.  Found login prompt.  Sending username ' + device['username'])
             telnet_obj.write(device['username'].encode('ascii') + b"\n")
+            login_typed = True
+            login_found = True
         elif idx == 3:
-            if DEBUG:
-                print('- Pattern matched: ' + obj.re.pattern.decode(
-                    'utf-8') + '  Setting password.  Sending password ' + device['password'])
-            telnet_obj.write(device['password'].encode('ascii') + b"\n")
+            if login_typed:
+                if DEBUG:
+                    print('LOGIN: Pattern matched: ' + obj.re.pattern.decode(
+                        'utf-8') + '.  Sending password ' + device['password'])
+                telnet_obj.write(device['password'].encode('ascii') + b"\n")
+                login_typed = False
+            else:
+                telnet_obj.write(b"\n")
+
+                # If we are at password prompt, but login hasn't been typed, press enter.
+        # If privilege mode prompt found, exit function
         elif idx == 1 or idx == 2:
-            return
-        elif idx == 4 or idx == 5:
-            return
+            if DEBUG:
+                print(
+                    'LOGIN: Found privilege prompt.  Exiting function.'
+                )
+            return True, idx, obj, output
+        # Found storage device prompt.  Exiting function.
+        elif idx == 4:
+            if DEBUG:
+                print(
+                    'LOGIN: Found storage device prompt.  Exiting function.'
+                )
+            return True, idx, obj, output
         else:
+            if login_found:
+                track_loops += 1
+                if track_loops >= 3 and login_found:
+                    print('Something is wrong with the loop')
             telnet_obj.write(b'\n')
             if DEBUG:
-                print('Login prompt not found.  Looping function.')
+                print('LOGIN: Login prompt not found.  Looping function.')
 
-        if track_incorrect >= 2:
+        if track_incorrect == 2:
             device['password'] = device['preferred_password']
             if DEBUG:
                 print('Incorrect password 2 times.  Updating password to preferred password: ' +
-                      device['preferred_password'])
+                      device['preferred_password'])c
 
 
-def match_passwords(telnet_obj, new_password):
+def match_passwords(telnet_obj, device, new_password):
     passwords_match = False
 
     while not passwords_match:
@@ -132,6 +196,7 @@ def match_passwords(telnet_obj, new_password):
         prompts = [
             b'Try again...',
             b'#',
+            b'Select storage device to use:',
         ]
 
         idx, obj, output = telnet_obj.expect(prompts, 15)
@@ -139,130 +204,22 @@ def match_passwords(telnet_obj, new_password):
         if idx == 0:
             if DEBUG:
                 print("Passwords don't match. Try again.")
-        elif idx == 1:
+        else:
+            device['password'] = device['preferred_password']
+
+        # Finish checking for matches.
+        if idx == 1:
             if DEBUG:
                 print("Passwords matched and were accepted.  Continuing")
             passwords_match = True
-            return True
+        elif idx == 2:
+            if DEBUG:
+                print("Passwords matched and were accepted.  Prompt for vmanage pre-config.")
+            passwords_match = True
+    return True
 
 
-
-# def login_telnet(telnet_obj, device):
-#     responses = [
-#         b'You must set an initial admin password.\r\r\nPassword:',              # 0
-#         b'Re-enter password:',                                                  # 1
-#         device['name'].encode('utf-8') + b'#',                                  # 2
-#         'vedge'.encode('utf-8') + b'#',                                         # 3
-#         br'[Ll]ogin:',                                                          # 4
-#         b'Login incorrect\r\n' + device['name'].encode('utf-8') + b' login:',   # 5
-#         b'System Initializing. Please wait to login...',                        # 6
-#         b'Account locked due to',                                               # 7
-#         b'System Ready',                                                        # 8
-#         b'Password:',                                                           # 9
-#         b'Select storage device to use:',                                       # 10
-#         b'Login incorrect\r\n' + 'vedge'.encode('utf-8') + b' login:',          # 11
-#         # r'Password',
-#         # r'^You must set an initial admin password.',
-#         # r'^Re-enter password:',
-#         # r'.*#'
-#     ]
-#     track_incorrect = 0
-#     while True:
-#         time.sleep(5)
-#         idx, obj, output = telnet_obj.expect(responses, 5)
-#         s = output.decode('utf-8')
-#         print(s)
-#
-#         # Search for more complicated patterns that are not working right with telnet expect
-#         if re.search('You must set an initial admin password.\r\r\nPassword:', s) is not None:
-#             # If initial setup prompted, send new password.
-#             match_passwords(device['preferred_password'])
-#         elif re.search('System Initializing. Please wait to login...', s) is not None:
-#             if DEBUG:
-#                 print('vManage is still initializing.  Waiting up to 180 seconds for system to be ready before trying again.')
-#             return_val = telnet_obj.read_until(b'System Ready', timeout=180)
-#
-#             if return_val is not b' ':
-#                 print('vManage is Ready. Logging in now.')
-#                 telnet_obj.write(b'\n')
-#         elif re.search('System Ready', s) is not None:
-#             if DEBUG:
-#                 print('vManage is ready to be logged in.')
-#             telnet_obj.write(b'\n')
-#         elif re.search('Login incorrect', s) is not None:
-#             track_incorrect += 1
-#             print('Incorrect Logins: ' + str(track_incorrect))
-#
-#         # If login prompt found, send username
-#         elif idx == 0:
-#             telnet_obj.write(device['preferred_password'].encode('ascii') + b"\n")
-#             if DEBUG:
-#                 print('Pattern matched: ' + obj.re.pattern.decode(
-#                     'utf-8') + '  Setting initial password.  Sending password ' + device['preferred_password'])
-#         elif idx == 4:
-#             telnet_obj.write(device['username'].encode('ascii') + b"\n")
-#             if DEBUG:
-#                 print('Pattern matched: ' + obj.re.pattern.decode(
-#                     'utf-8') + '.  Found login prompt.  Sending username ' + device['username'])
-#         # If Password prompt found, send password
-#         elif idx == 9:
-#             if output.decode('utf-8').find('You must set an initial admin password.') >= 0:
-#                 # If initial setup prompted, send new password.
-#                 match_passwords(device['preferred_password'])
-#             else:
-#                 if DEBUG:
-#                     print('Found password prompt.  Sending password ' + device['password'])
-#                 # If initial setup not prompted, send regular password.
-#                 telnet_obj.write(device['password'].encode('ascii') + b"\n")
-#                 time.sleep(5)
-#         elif idx == 1:
-#             telnet_obj.write(device['preferred_password'].encode('ascii') + b'\n')
-#             device['password'] = device['preferred_password']
-#             if DEBUG:
-#                 print('Found re-enter password prompt.  Sending password ' + device['preferred_password'])
-#         elif idx == 2 or idx == 3:
-#             prompt_result = idx
-#             if DEBUG:
-#                 print('Device prompt ' + obj.re.pattern.decode('utf-8') + " was found.  Setting password to preferred and exiting login function.")
-#             device['password'] = device['preferred_password']
-#             return obj, output
-#         elif idx == 5 or idx == 11:
-#             if output.decode('utf-8').find('System Initializing. Please wait to login...') >= 0:
-#                 if DEBUG:
-#                     print('vManage is still initializing.  Waiting 20 seconds before trying again.')
-#                 time.sleep(20)
-#             else:
-#                 track_incorrect += 1
-#                 print('Incorrect Logins: ' + str(track_incorrect))
-#                 if track_incorrect >= 2:
-#                     if DEBUG:
-#                         print('Incorrect login detected.  Updating to preferred password and looping.')
-#                     # If login is incorrect, try the preferred_password key on next loop
-#                     device['password'] = device['preferred_password']
-#         # If we get back 'account locked' or a prompt to select storage (vmanage), exit this routine.
-#         elif idx == 7 or idx == 10:
-#             if DEBUG:
-#                 print('Pattern matched: ' + obj.re.pattern.decode(
-#                     'utf-8') + " - Exiting out of login loop.")
-#             return obj, output
-#         elif idx == 8:
-#             if re.search('login:', s) is None:
-#                 if DEBUG:
-#                     print("Found system ready prompt.  Returning and looping one last time")
-#                 telnet_obj.write(b'\n')
-#         else:
-#             if DEBUG:
-#                 print("Didn't find a login prompt.  Looping to try again.")
-#             telnet_obj.write(b'\n')
-#
-#         if track_incorrect >= 2:
-#             if DEBUG:
-#                 print('Login incorrect.  Updating password to ' + device['preferred_password'])
-#             # If login is incorrect, try the preferred_password key on next loop
-#             device['password'] = device['preferred_password']
-
-
-def pre_config_vmanage(telnet_obj):
+def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
     prompts = [
         b'Would you like to format vdb? (y/n):',                # 0
         b'Select storage device to use:',                       # 1
@@ -272,13 +229,16 @@ def pre_config_vmanage(telnet_obj):
         b'vmanage#',                                            # 5
     ]
     # Track first run of loop to pass received_output into output
-    # first_run = True
+    first_run = True
     while True:
-        idx, obj, output = telnet_obj.expect(prompts, 2)
-        # if output is b' ':
-        #     if first_run:
-        #         output = received_output
-        #         obj = received_obj
+        idx, obj, output = None, None, None
+        if first_run:
+            idx = input_idx
+            obj = input_obj
+            output = input_output
+            first_run = False
+        else:
+            idx, obj, output = telnet_obj.expect(prompts, 2)
 
         s = output.decode()
         if DEBUG:
@@ -342,7 +302,9 @@ def write_config(telnet_obj, device, config):
             print('Logged in.  Beginning to send commands.')
             for line in config:
                 telnet_obj.write(line.encode())
-            telnet_obj.write(b'exit\n')
+            telnet_obj.expect(prompts, 60)
+            telnet_obj.write(b'\n')
+            telnet_obj.expect(prompts, 5)
 
 
 def tabulate_devices():
@@ -388,16 +350,18 @@ def main():
                         if DEBUG:
                             print('Logging into ' + HOST + ':' + device['port'])
                         # telnet_obj, telnet_output = login_telnet(tn, device)
-                        login2(tn, device)
+                        successful, telnet_idx, telnet_obj, telnet_output = login2(tn, device)
                         if device['name'] == 'vmanage' and not device['is_configured']:
                             if DEBUG:
                                 print('Pre-configuring vManage.  This process will take 15-30 minutes')
-                            pre_config_exected = pre_config_vmanage(tn)
-                            successful = login2(tn, device)
-                            if successful:
-                                print('Successfully pre-configured vManage.  Moving onto general configuration.')
+                            pre_config_completed = pre_config_vmanage(tn, telnet_idx, telnet_obj, telnet_output)
+                            if pre_config_completed:
+
+                                successful = login2(tn, device)
+                        if successful:
+                            print('Successfully pre-configured vManage.  Moving onto general configuration.')
                             #login_telnet(tn, device)
-                        write_config(tn, device, config_lines)
+                            write_config(tn, device, config_lines)
                         print(tn.read_all())
                     except ConnectionRefusedError as error:
                         print('Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
