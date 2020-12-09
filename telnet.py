@@ -182,7 +182,7 @@ def login2(telnet_obj, device):
             device['password'] = device['preferred_password']
             if DEBUG:
                 print('Incorrect password 2 times.  Updating password to preferred password: ' +
-                      device['preferred_password'])c
+                      device['preferred_password'])
 
 
 def match_passwords(telnet_obj, device, new_password):
@@ -219,6 +219,48 @@ def match_passwords(telnet_obj, device, new_password):
     return True
 
 
+def format_time(input):
+    input_str = str(input).split('.')[0]
+
+    if len(input_str) != 2:
+        output = str(0) + str(input_str)
+        output = str(output)
+    else:
+        output = input_str
+    return output
+
+
+def wait_timer(message, telnet_obj, wait_string, interval=30, max_time=3600):
+    start_time = time.time()
+    time_delta = 0
+    hours = '00'
+    minutes = '00'
+    seconds = '00'
+    beginning_max_time = max_time
+
+    # Check to see if max timer has expired
+    while max_time > 0:
+        if max_time - interval < 0:
+            interval = max_time
+        max_time = beginning_max_time
+        output = telnet_obj.read_until(wait_string, interval)
+        now_time = time.time()
+        time_delta = int(now_time - start_time)
+        max_time = max_time - time_delta
+        if time_delta >= 3600:
+            hours = format_time(time_delta // 3600)
+            time_delta = time_delta - int(hours) * 3600
+        if time_delta >= 60:
+            minutes = format_time(time_delta // 60)
+            time_delta = time_delta - int(minutes) * 60
+
+        seconds = format_time(time_delta)
+
+        print(message)
+        print('Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds))
+    print('Time has elapsed on the wait_timer function.')
+
+
 def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
     prompts = [
         b'Would you like to format vdb? (y/n):',                # 0
@@ -252,27 +294,15 @@ def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
                 print('Pattern matched for selecting device: Selected vdb as storage device.')
             telnet_obj.write(b"y\n")
             # Reboot will take 30+ minutes to complete.  Set timer at 40 minutes and watch for 'System Ready' message
+            reboot_complete = False
+            start_time = time.time()
             time_remaining = 2400
             sleep_interval = 30
-            while time_remaining > 0:
-                print(
-                    'Waiting for vManage to build the hard drive.  ' +
-                    str(time_remaining/60) +
-                    ' minutes remaining.'
-                )
-                print(
-                    'Do not shut down the VM during this process.'
-                )
-                time.sleep(sleep_interval)
-                telnet_obj.write(b"\n")
-                time_remaining -= sleep_interval
-                idx, obj, output = telnet_obj.expect(prompts, 2)
-                if idx == 2:
-                    # System ready message returned.  Reduce timer to 0
-                    time_remaining = 0
-                elif idx == 3:
-                    print('vManage is rebooting now.')
-            # Once timer hits 0, exit the function and return True
+            print('PRE-CONFIG:VMANAGE: Beginning reboot.  This could take between 5 and 20 minutes.')
+
+            wait_timer('Waiting for vManage to build HDD and reboot.  DO NOT SHUT DOWN VMANAGE.',
+                       telnet_obj, b'System Ready', 30)
+
             print('HDD Build on vManage is complete.  Continuing with configuration.')
             return True
         elif re.search('Select storage device to use:', s):
@@ -365,6 +395,8 @@ def main():
                         print(tn.read_all())
                     except ConnectionRefusedError as error:
                         print('Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
+                    except BrokenPipeError as error:
+                        print('Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
 
         time.sleep(5)
         track_configured = 0
