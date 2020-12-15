@@ -1,0 +1,422 @@
+##################################################
+1) vManage - Initial Config
+##################################################
+
+config
+system
+ system-ip 1.1.1.1
+ site-id 1000
+ organization-name "DEFAULT - 155893"
+ vbond 51.51.51.2
+!
+vpn 0
+ no interface eth0
+ interface eth1
+  ip address 51.51.51.1/24
+  tunnel-interface
+    allow-service sshd
+  !
+  no shutdown
+ ip route 0.0.0.0/0 51.51.51.254
+ !
+vpn 512
+  interface eth0
+  ip dhcp-client
+  no shutdown
+!
+commit and-quit
+!
+
+
+
+##################################################
+2) vManage - Generate Root CA key
+##################################################
+!
+vshell
+!
+openssl genrsa -out ROOTCA.key 2048
+
+
+
+##################################################
+3) vManage - Generate Root CA certificate
+##################################################
+!
+vshell
+!
+openssl req -x509 -new -nodes -key ROOTCA.key -sha256 -days 2000 \
+    -subj "/C=US/ST=AZ/L=PHX/O=testlab/CN=vmanage.lab" \
+    -out ROOTCA.pem
+
+
+##################################################
+4) vManage - Login to HTTPS
+##################################################
+! Exit vshell
+vmanage$ exit
+!
+! Find IP for VPN 512
+show int | tab
+!
+! Login via web browser on your PC
+https://172.28.43.174
+!
+! NOTE:  It may take vManage 5-10 minute to fully load the web portal.  Keep trying.
+! Generic passwords are admin/insight
+
+
+##################################################
+5) vManage - Update settings
+##################################################
+
+Navigate to Administration -> Settings and make the following updates:
+
+ a. Organization Name = DEFAULT - 155893
+ b. vBond IP = 51.51.51.2
+ c. from vManage SSH session, go back into vshell and type 'cat ROOTCA.pem'.  
+	Copy and paste entire output.
+ d. Controller Certificate Authority -> Change to 'Enterprise Root Certificate'.  
+	Paste text from ROOTCA.pem copied in step above.
+
+
+##################################################
+6) vManage - Generate Certificate Signing Request (CSR)
+##################################################
+
+a. Navigate to Configuration -> Certificates -> Controllers -> vManage -> ... -> Generate CSR
+
+b. A window will popup.  Ignore the window.
+
+c. Go back to SSH session for vMange and back into vshell
+
+vshell
+!
+openssl x509 -req -in vmanage_csr \
+    -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
+    -out vmanage.crt -days 2000 -sha256
+	
+	
+
+##################################################
+7) vManage - Install vManage Certificate
+##################################################
+
+Go back to the web browser (defaults to https://172.28.43.174)
+
+a. from vshell, get contents of the vmanage.crt file just created
+	cat vmanage.crt
+
+b. Navigate to Configuration -> Certificates -> Controllers -> click 'Install Certificate' in top right
+
+c. Click Install and verify success.
+
+
+####################################
+8) vBond  - Initial Config
+####################################
+
+config
+system
+ host-name vbond
+ system-ip 1.1.1.2
+ site-id 1000
+ organization-name "DEFAULT - 155893"
+ vbond 51.51.51.2 local vbond-only
+!
+vpn 0
+ interface ge0/0
+  no tunnel-interface
+  ip address 51.51.51.2/24
+  no shutdown
+ !
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  no shutdown
+ !
+commit and-quit
+!
+
+
+
+
+
+####################################
+9) vSmart - Initial Config
+####################################
+
+config
+system
+ system-ip 1.1.1.3
+ site-id 1000
+ organization-name "DEFAULT - 155893"
+ vbond 51.51.51.2
+!
+vpn 0
+ no interface eth0
+ interface eth1
+  ip address 51.51.51.3/24
+  no shutdown
+ !
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  no shutdown
+ !
+commit and-quit
+!
+
+####################################
+10) vManage - Add vBond and vSmart Devices and generate CSR
+####################################
+
+a. Navigate to Configuration -> Devices -> Controllers -> Click 'Add Controller' and choose vBond
+
+	vBond Management IP Address: 51.51.51.2
+	vBond Username: admin
+	vBond Password: insight
+	
+	leave 'Generate CSR' checked
+
+b. click Add
+
+c. Click 'Add Controller' and choose vSmart
+
+	vBond Management IP Address: 51.51.51.3
+	vBond Username: admin
+	vBond Password: insight
+	
+	leave 'Generate CSR' checked
+
+d. click Add
+
+
+####################################
+11) vManage - Generate CSR for vBond and vSmart
+####################################
+
+a. Navigate to Configuration -> Certificates -> Controllers
+
+b. For vBond, click the three dots (...). and choose 'Generate CSR'.  
+
+c. Copy the contents of the window.
+
+d. Launch a new SSH session to the vManage MGMT IP (default: 172.28.43.174) to complete next steps.
+
+e. Go back to vManage vshell window
+
+   vshell
+
+e. Type 'vim vbond.csr' to create a new file to put the CSR into.
+
+   vim vbond.csr
+
+f.  Paste the contents of the file.  In vim this is done by pressing 'i' to go into edit mode, then 
+	you should be able to right click/CTRL+V to paste the contents into the file.  Press 'Esc' to exit 
+	edit mode, and then type ':wq' to write and quit the application.
+
+g.  Repease steps b-f with vsmart creating a file called vsmart.csr
+
+
+
+####################################
+12) vManage - Sign the vBond/vSmart certificates
+####################################
+
+a. Go back to SSH session on vmanage
+!
+vshell
+!
+openssl x509 -req -in vbond.csr \
+    -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
+    -out vbond.crt -days 2000 -sha256
+	
+	
+openssl x509 -req -in vsmart.csr \
+    -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
+    -out vsmart.crt -days 2000 -sha256	
+
+
+####################################
+13) vManage - Install the vBond/vSmart certificate
+####################################
+
+Go back to the web browser (defaults to https://172.28.43.174)
+
+a. from vshell, get contents of the vbond.crt file just created
+	cat vbond.crt
+
+b. Navigate to Configuration -> Certificates -> Controllers -> click 'Install Certificate' in top right
+
+c. Click Install and verify success.
+
+d. repeat steps a-c for vsmart.crt file just created.
+	cat vsmart.crt
+
+
+####################################
+14) vBond - Turn encapsulation back on vBond
+####################################
+
+a.  SSH to the MGMT IP or console address of vBond
+
+b. Enable IPSEC on Ge0/0
+
+	config
+	vpn 0
+	 interface ge0/0
+	  tunnel-interface
+	   encapsulation ipsec
+	  !
+	  no shutdown
+	 !
+	!
+	commit and-quit
+
+c.  Verify control connetions came up. STATE = UP
+
+	show orchestrator connections
+	
+	
+####################################
+15) vSmart - Turn tunnel interface on vSmart
+####################################
+
+a.  SSH to the MGMT IP or console address of vSmart
+
+b. Enable tunnel mode on VPN0:ETH1
+
+	config
+	vpn 0
+	 interface eth1
+	  tunnel-interface
+	  no shutdown
+	!
+	commit and-quit
+
+c.  Verify control connetions came up. STATE = UP
+
+	show control connections
+	
+	
+	
+####################################
+16) vManage - Upload the WAN Edge List
+####################################
+
+
+
+
+
+####################################
+17) vManage - Activate WAN Edge BR-INET-A
+####################################
+
+system
+ host-name               BR-INET-A
+ system-ip               3.1.1.1
+ site-id                 1
+ admin-tech-on-failure
+ no route-consistency-check
+ organization-name       "DEFAULT - 155893"
+ vbond 51.51.51.2
+!
+vpn 0
+ interface ge0/0
+  ip dhcp-client
+  ipv6 dhcp-client
+  tunnel-interface
+   encapsulation ipsec
+   allow-service sshd
+
+  !
+  no shutdown
+ !
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  ipv6 dhcp-client
+  no shutdown
+ !
+
+
+####################################
+17) BR-HYBRID-VEDGE-A - Activate WAN Edge
+####################################
+
+
+system
+ host-name               BR-HYBRID-VEDGE-A
+ system-ip               3.1.1.2
+ site-id                 2
+ admin-tech-on-failure
+ no route-consistency-check
+ organization-name       "DEFAULT - 155893"
+ vbond 51.51.51.2
+!
+vpn 0
+ interface ge0/0
+  ip dhcp-client
+  ipv6 dhcp-client
+  tunnel-interface
+   encapsulation ipsec
+   allow-service sshd
+
+  !
+  no shutdown
+ !
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  ipv6 dhcp-client
+  no shutdown
+ !
+ commit and-quit
+
+
+
+####################################
+17) BR-HA-HYBRID-A - Configure & Activate WAN Edge
+####################################
+
+
+system
+ host-name               BR-HA-HYBRID-A
+ system-ip               3.1.1.3
+ site-id                 3
+ admin-tech-on-failure
+ no route-consistency-check
+ organization-name       "DEFAULT - 155893"
+ vbond 51.51.51.2
+!
+vpn 0
+ interface ge0/0
+  ip dhcp-client
+  ipv6 dhcp-client
+  tunnel-interface
+   encapsulation ipsec
+   allow-service sshd
+
+  !
+  no shutdown
+ !
+!
+vpn 512
+ interface eth0
+  ip dhcp-client
+  ipv6 dhcp-client
+  no shutdown
+ !
+ commit and-quit
+ !
+ !
+ !
+ !
+ request vedge-cloud activate chassis 27777243-3c61-0c7c-1363-534be0ac86fc token f905cabf3f3b44b002e197fb4a3a9deb
+ 
+ 

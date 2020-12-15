@@ -49,10 +49,11 @@ vManage2 = {
     'is_configured': False,
     'initial_config_file': 'configs/vmanage2-initial.txt',
     'thread_header': '',
+    'vpn512_ip': '',
 }
 vSmart = {
     'name': 'vsmart',
-    'port': '32771',
+    'port': '32770',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -61,10 +62,11 @@ vSmart = {
     'is_configured': False,
     'initial_config_file': 'configs/vsmart-initial.txt',
     'thread_header': '',
+    'vpn512_ip': '',
 }
 vBond = {
     'name': 'vbond',
-    'port': '32770',
+    'port': '32771',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -73,6 +75,7 @@ vBond = {
     'is_configured': False,
     'initial_config_file': 'configs/vbond-initial.txt',
     'thread_header': '',
+    'vpn512_ip': '',
 }
 vManage = {
     'name': 'vmanage',
@@ -116,6 +119,31 @@ def main():
             ALL_COMPLETE = True
     print('All devices configured.  Login to vManage using the MGMT interface IP: PLACEHOLDER') # TODO: Add MGMT IF IP after configuration
 
+
+
+def get_mgmt_if(telnet_obj, device):
+    if DEBUG:
+        print(device['thread_header'] + 'Getting MGMT IP for vManage')
+    reply = telnet_obj.write(b'show int | tab')
+    reply = reply.split('\n')
+    x = 1
+    for line in reply:
+        if re.search('^(512).*', line) is not None:
+            if DEBUG:
+                print('Found VPN 512 in line ' + str(x))
+            split_line = ' '.join(line.split()).split()
+            # split_line = line.split(' ')
+            CIDR = split_line[3]
+            ipv4 = CIDR.split('/')
+            ipv4 = ipv4[0]
+            print(ipv4)
+            if left(ipv4, 1) == 0:
+                print('VMANAGE: GET_VPN512_IP: Invalid IPv4 Address found.  Enter correct IPv4 address to continue.')
+            else:
+
+                print('VMANAGE: GET_VPN512_IP: Found IPv4 address ' + ipv4 + '.')
+                return ipv4
+            x += 1
 
 def threads():
     if DEBUG:
@@ -202,6 +230,7 @@ def configure_viptela_pod(device, thread_name, counter):
                   device['vpn0_ip'] +
                   ') is active!')
             device['is_configured'] = True
+
         else:
             print(device['thread_header'] + device['name'] + '(' +
                   device['vpn0_ip'] +
@@ -224,6 +253,11 @@ def configure_viptela_pod(device, thread_name, counter):
                 if successful:
                     print(device['thread_header'] + 'Successfully pre-configured vManage.  Moving onto general configuration.')
                     write_config(tn, device, config_lines)
+                    if device['name'] == 'vmanage':
+                        # Wait 10 seconds for DHCP to assign IP
+                        time.sleep(10)
+                        vmanage_vpn512_ip = get_mgmt_if(tn, device)
+                        device['vpn512_ip'] = vmanage_vpn512_ip
                 print(device['thread_header'] + 'MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
                 if tn.sock:
                     tn.close()
@@ -497,7 +531,7 @@ def pre_config_vmanage(telnet_obj, input_idx, input_obj, input_output):
 
         s = output.decode()
         if DEBUG:
-            print(device['thread_header'] + 'Looping through pre_config for vManage')
+            print(device['thread_header'] + 'Looping through pre_config for ' + device['name'] + ':' + device['port'])
         # If privelege prompt exists, exit this function and return False to parent.
         if idx == 5:
             return False
@@ -593,7 +627,14 @@ def tabulate_device_status():
     print(tabulate(status, headers=['DEVICE', 'VPN0 IP', 'STATUS'], tablefmt="pretty"))
 
 
+def left(s, amount):
+    return s[:amount]
 
+def right(s, amount):
+    return s[-amount:]
+
+def mid(s, offset, amount):
+    return s[offset:offset+amount]
 
 
 
