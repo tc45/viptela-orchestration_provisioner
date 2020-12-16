@@ -8,6 +8,8 @@ import threading
 # from classes import multi_threading
 from utils import ping_host
 from netmiko import ConnectHandler, SSHDetect, NetmikoAuthenticationException, NetmikoTimeoutException
+from viptela_rest import vmanage_lib
+import json
 
 
 class myThread (threading.Thread):
@@ -92,7 +94,30 @@ vManage = {
     'root_ca_cert': '',
 }
 
-v_devices = [vManage, vManage2, vSmart, vBond]
+ca = '''-----BEGIN CERTIFICATE-----
+MIIDczCCAlugAwIBAgIJAJV6e0beddnDMA0GCSqGSIb3DQEBCwUAMFAxCzAJBgNV
+BAYTAlVTMQswCQYDVQQIDAJBWjEMMAoGA1UEBwwDUEhYMRAwDgYDVQQKDAd0ZXN0
+bGFiMRQwEgYDVQQDDAt2bWFuYWdlLmxhYjAeFw0yMDEyMTIxNTIyMDhaFw0yNjA2
+MDQxNTIyMDhaMFAxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJBWjEMMAoGA1UEBwwD
+UEhYMRAwDgYDVQQKDAd0ZXN0bGFiMRQwEgYDVQQDDAt2bWFuYWdlLmxhYjCCASIw
+DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALrTFkOpa4Uf+ZOA0Lrjga3ce85S
+w5Y/cVKjZBvRflYUdDEmaoFYRAkPVCgjvHS3Db+plbdd14jKmu3vfKuHGtJHbXmb
+XWqhhQhQz+UTcS8S+bHsGAGf15JRcRHAfLIwUQaV5uUaOTKm72uTFwxj/Kqg1mVb
+O1KYKMCN7Cvrbd4qPc68rvXS4+yWCqt5+OaGbm71VSSoayg4/hBFU42x9bylFcfj
+LopeI6X6XoiepZgXaLTiHx3P7Z88p8wD2noLq/XOMGxYZzLiyzYC4bqE6mNjZv+E
+2aqQAmUUhRdFyP3cSQB59JuLghQ3tlVQRbuubgbYqEjXT8ZydHDTvPedYKECAwEA
+AaNQME4wHQYDVR0OBBYEFCzQUpLv8249djO5uKrJO9tGztLFMB8GA1UdIwQYMBaA
+FCzQUpLv8249djO5uKrJO9tGztLFMAwGA1UdEwQFMAMBAf8wDQYJKoZIhvcNAQEL
+BQADggEBAFwLmhtpPVAAyxbWaa8laB4a29+jFMWC5xxPC4IVyCdsI6KPbCV2azMU
+Oiq3bEkzT4ETS5s1TwUck67iiCCcHt8si2WAcpLABb5n854geul4pAg+wyc4qo9C
+wZFvvzeLMtdaJRw2HMiKYqP/iNuRU305fMynWTjznsDgaSeZrsPMZrKIV39JmNLB
+7l+x0JSa2PVuju4GlELGZ1f0rIoXO3TFQyIXinQxp1WwRJ/7SPyQ8kfKzpzdxoVy
+vOEP9eTWhsDDLIM7N+0UlgyvB1YX9o0XsHklaE0RFk79kzEELIMeDFjT5sxENloY
+htGzCFDcVK3wwZcralx8ePE/kDLOQy0=
+-----END CERTIFICATE-----'''
+
+
+v_devices = [vManage, vSmart, vBond]
 
 for device in v_devices:
     device['console_host'] = HOST
@@ -123,11 +148,59 @@ def main():
     for device in v_devices:
         if left(device['name'], 7) == 'vmanage':
             try:
-                vmanage_ssh_config(device)
+                #vmanage_ssh_config(device)
+                provision_vmanage_initial(device)
             except NetmikoAuthenticationException as error:
                 print('Authenticatino failed to ' + device['name'] + ':' + device['port'] + ' on VPN512 IP address ' + device['vpn512_ip'])
             except NetmikoTimeoutException as error:
                 print('Connectino timed out to ' + device['name'] + ':' + device['port'] + ' on VPN512 IP address ' + device['vpn512_ip'])
+
+
+def provision_vmanage_initial(device):
+    obj = vmanage_lib(device['vpn512_ip'], device['username'], device['password'])
+    obj.run_api('system/device/vedges')
+
+    # Set Organization name
+    payload = {
+        'domain-id': '1',
+        'org': 'DEFAULT - 155893',
+        'password': 'insight',
+    }
+    obj.run_api('settings/configuration/organization', payload=payload, method='put')
+
+    # Set vbond IP address in Administration -> Settings
+    payload = {
+        'domainIp': '2.2.2.1',
+        'port': 12346
+    }
+    obj.run_api('settings/configuration/device', payload, method='put')
+
+    # Set certificate to 'enterprise'
+    payload = {
+        'certificateSigning': 'enterprise'
+    }
+    response = obj.run_api('settings/configuration/certificate', payload, method='post')
+
+    # Import enterprise ROOTCA.pem file into Administration -> certificates
+    payload = {
+        'enterpriseRootCA': ca
+    }
+    response = obj.run_api('settings/configuration/certificate/enterpriserootca', payload, method='put')
+
+    # Import the WAN edge file
+    files = [
+        ("file", ("DEFAULT - 155893.viptela", open("C:/Users/Tony Curtis/Desktop/DEFAULT - 155893.viptela", "rb"),
+                  "application/octet-stream"))
+    ]
+    payload = [{"validity": "valid", "upload": True}]
+    response = obj.run_api('system/device/fileupload', payload, files=files, method='post',
+            headers=None)
+    if response.status_code == 200:
+        response_dict = json.loads(response.text)
+        upload_status = response_dict['vedgeListUploadStatus']
+        status_code = response_dict['vedgeListStatusCode']
+        activity_list = response_dict['activityList']
+        print('WAN Edge Upload status: ' + upload_status)
 
 
 def vmanage_ssh_config(device):

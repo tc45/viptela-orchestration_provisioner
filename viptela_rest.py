@@ -19,30 +19,8 @@ import time
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-ca = '''-----BEGIN CERTIFICATE-----
-MIIDczCCAlugAwIBAgIJAJV6e0beddnDMA0GCSqGSIb3DQEBCwUAMFAxCzAJBgNV
-BAYTAlVTMQswCQYDVQQIDAJBWjEMMAoGA1UEBwwDUEhYMRAwDgYDVQQKDAd0ZXN0
-bGFiMRQwEgYDVQQDDAt2bWFuYWdlLmxhYjAeFw0yMDEyMTIxNTIyMDhaFw0yNjA2
-MDQxNTIyMDhaMFAxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJBWjEMMAoGA1UEBwwD
-UEhYMRAwDgYDVQQKDAd0ZXN0bGFiMRQwEgYDVQQDDAt2bWFuYWdlLmxhYjCCASIw
-DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALrTFkOpa4Uf+ZOA0Lrjga3ce85S
-w5Y/cVKjZBvRflYUdDEmaoFYRAkPVCgjvHS3Db+plbdd14jKmu3vfKuHGtJHbXmb
-XWqhhQhQz+UTcS8S+bHsGAGf15JRcRHAfLIwUQaV5uUaOTKm72uTFwxj/Kqg1mVb
-O1KYKMCN7Cvrbd4qPc68rvXS4+yWCqt5+OaGbm71VSSoayg4/hBFU42x9bylFcfj
-LopeI6X6XoiepZgXaLTiHx3P7Z88p8wD2noLq/XOMGxYZzLiyzYC4bqE6mNjZv+E
-2aqQAmUUhRdFyP3cSQB59JuLghQ3tlVQRbuubgbYqEjXT8ZydHDTvPedYKECAwEA
-AaNQME4wHQYDVR0OBBYEFCzQUpLv8249djO5uKrJO9tGztLFMB8GA1UdIwQYMBaA
-FCzQUpLv8249djO5uKrJO9tGztLFMAwGA1UdEwQFMAMBAf8wDQYJKoZIhvcNAQEL
-BQADggEBAFwLmhtpPVAAyxbWaa8laB4a29+jFMWC5xxPC4IVyCdsI6KPbCV2azMU
-Oiq3bEkzT4ETS5s1TwUck67iiCCcHt8si2WAcpLABb5n854geul4pAg+wyc4qo9C
-wZFvvzeLMtdaJRw2HMiKYqP/iNuRU305fMynWTjznsDgaSeZrsPMZrKIV39JmNLB
-7l+x0JSa2PVuju4GlELGZ1f0rIoXO3TFQyIXinQxp1WwRJ/7SPyQ8kfKzpzdxoVy
-vOEP9eTWhsDDLIM7N+0UlgyvB1YX9o0XsHklaE0RFk79kzEELIMeDFjT5sxENloY
-htGzCFDcVK3wwZcralx8ePE/kDLOQy0=
------END CERTIFICATE-----'''
 
-
-class rest_api_lib:
+class vmanage_lib:
     def __init__(self, vmanage_ip, username, password):
         self.vmanage_ip = vmanage_ip
         self.session = {}
@@ -113,40 +91,37 @@ class rest_api_lib:
         response = self.session[self.vmanage_ip].put(url, data=payload, headers=headers, files=files, verify=False)
         return response
 
-
-def run_api(api_obj, mount_point, payload=None, method='get', files=None, headers=''):
-    response = None
-    if headers is None:
-        pass
-    elif headers != '':
-        for key, value in headers.items():
-            headers[key] = value
-    else:
-        headers = {'Content-Type': 'application/json'}
-    if method == 'get':
-        if files is not None:
-            response = api_obj.get_request(mount_point, files=files)
+    def run_api(self, mount_point, payload=None, method='get', files=None, headers=''):
+        response = None
+        if headers is None:
+            pass
+        elif headers != '':
+            for key, value in headers.items():
+                headers[key] = value
         else:
-            response = api_obj.get_request(mount_point)
-    elif method == 'post':
-        if files is not None:
-            response = api_obj.post_request(mount_point, payload, files=files, headers=headers)
+            headers = {'Content-Type': 'application/json'}
+        if method == 'get':
+            if files is not None:
+                response = self.get_request(mount_point, files=files)
+            else:
+                response = self.get_request(mount_point)
+        elif method == 'post':
+            if files is not None:
+                response = self.post_request(mount_point, payload, files=files, headers=headers)
+            else:
+                response = self.post_request(mount_point, payload, headers=headers)
+        elif method == 'put':
+            if files is not None:
+                response = self.put_request(mount_point, payload, files=files, headers=headers)
+            else:
+                response = self.put_request(mount_point, payload, headers=headers)
+        print(str(response.status_code) + ' ' + response.reason)
+        if response.status_code != 200:
+            print(response.content.decode())
+        if response is None:
+            return False
         else:
-            response = api_obj.post_request(mount_point, payload, headers=headers)
-    elif method == 'put':
-        if files is not None:
-            response = api_obj.put_request(mount_point, payload, files=files, headers=headers)
-        else:
-            response = api_obj.put_request(mount_point, payload, headers=headers)
-
-    print(str(response.status_code) + ' ' + response.reason)
-    if response.status_code != 200:
-        print(response.content.decode())
-    time.sleep(2)
-    if response is None:
-        return False
-    else:
-        return response
+            return response
 
 
 def main(args):
@@ -154,7 +129,7 @@ def main(args):
         print(__doc__)
         return
     vmanage_ip, username, password = args[0], args[1], args[2]
-    obj = rest_api_lib(vmanage_ip, username, password)
+    obj = vmanage_lib(vmanage_ip, username, password)
     # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
     run_api(obj, 'system/device/vedges')
     # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
@@ -194,7 +169,6 @@ def main(args):
                   "application/octet-stream"))
     ]
     payload = [{"validity": "valid", "upload": True}]
-    payload = [("validity", "valid"), ("upload", True)]
     response = run_api(obj, 'system/device/fileupload', payload, files=files, method='post',
             headers=None)
 
