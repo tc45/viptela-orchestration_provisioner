@@ -14,6 +14,7 @@ import requests
 import sys
 import json
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from requests import ConnectionError
 from pprint import pprint
 import time
 
@@ -37,9 +38,11 @@ class vmanage_lib:
 
         # Url for posting login data
         login_url = base_url_str + login_action
-
-        sess = requests.session()
-
+        try:
+            sess = requests.session()
+        except ConnectionError:
+            print('Connection is not available.  Try again.')
+            return False
         # If the vmanage has a certificate signed by a trusted authority change verify to True
         login_response = sess.post(url=login_url, data=login_data, verify=False)
 
@@ -60,6 +63,7 @@ class vmanage_lib:
             sess.headers['X-XSRF-TOKEN'] = json.loads(login_token.content.decode())['token']
 
         self.session[vmanage_ip] = sess
+        return True
 
     def get_request(self, mount_point):
         """GET request"""
