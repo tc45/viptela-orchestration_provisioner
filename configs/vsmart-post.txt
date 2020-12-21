@@ -3,6 +3,10 @@
 	vpn 0
 	 interface eth1
 	  tunnel-interface
+   		allow-service dhcp
+   		allow-service dns
+   		allow-service icmp
+   		allow-service sshd
 	  no shutdown
 	!
 	commit and-quit

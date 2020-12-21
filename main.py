@@ -18,6 +18,15 @@ import socket
 from requests.packages.urllib3.exceptions import MaxRetryError, InsecureRequestWarning
 import requests
 import sys
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+import base64
+from vmanage.cli.certificate.install import install as cert_install
+from vmanage.api.certificate import Certificate
+from vmanage.api.settings import Settings
+from vmanage.api.authentication import Authentication
+from vmanage.api.utilities import Utilities
+from vmanage.api.device import Device
 
 
 class myThread (threading.Thread):
@@ -32,7 +41,6 @@ class myThread (threading.Thread):
 
     def run(self):
         print("\nStarting " + self.name)
-        #counter(self.name, self.counter)
         configure_viptela_pod(self.device, self.name, self.counter)
         print("Exiting " + self.name)
 
@@ -45,12 +53,16 @@ LOGGED_IN = False
 ALL_COMPLETE = False
 DEBUG = True
 
+if DEBUG:
+    paramiko.util.log_to_file('ssh.log')
+
 # Create vManage, vBond, and vSmart objects.  Associate default configuration files with each object.  Add to list.
 
 vManage2 = {
     'name': 'vmanage',
     'port': '32793',
     'system_ip': '1.1.1.5',
+    'mgmt_ip': '172.28.43.175',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -64,11 +76,13 @@ vManage2 = {
     'CSR': '',
     'CRT': '',
     'provisioned': '',
+    'ssh_obj': None,
 }
 vSmart = {
     'name': 'vsmart',
     'port': '32770',
     'system_ip': '1.1.1.3',
+    'mgmt_ip': '172.28.43.172',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -76,15 +90,18 @@ vSmart = {
     'vpn0_ip': '51.51.51.3',
     'is_configured': False,
     'initial_config_file': 'configs/vsmart-initial.txt',
+    'post_config_file': 'configs/vsmart-post.txt',
     'thread_header': '',
     'vpn512_ip': '',
     'CSR': '',
     'CRT': '',
+    'ssh_obj': None,
 }
 vBond = {
     'name': 'vbond',
     'port': '32771',
     'system_ip': '1.1.1.2',
+    'mgmt_ip': '172.28.43.173',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -92,15 +109,18 @@ vBond = {
     'vpn0_ip': '51.51.51.2',
     'is_configured': False,
     'initial_config_file': 'configs/vbond-initial.txt',
+    'post_config_file': 'configs/vbond-post.txt',
     'thread_header': '',
     'vpn512_ip': '',
     'CSR': '',
     'CRT': '',
+    'ssh_obj': None,
 }
 vManage = {
     'name': 'vmanage',
     'port': '32769',
     'system_ip': '1.1.1.1',
+    'mgmt_ip': '172.28.43.174',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -114,6 +134,7 @@ vManage = {
     'CSR': '',
     'CRT': '',
     'provisioned': '',
+    'ssh_obj': None,
 }
 
 v_devices = [vManage, vSmart, vBond]
@@ -129,8 +150,6 @@ def main():
 
     tabulate_devices()
 
-    # threads_test()
-
     while not ALL_COMPLETE:
         threads2()
 
@@ -143,39 +162,65 @@ def main():
 
         if track_configured == len(v_devices):
             ALL_COMPLETE = True
-    print('MAIN: All devices configured.  Login to vManage using the MGMT interface IP: PLACEHOLDER') # TODO: Add MGMT IF IP after configuration
+
     for device in v_devices:
         if left(device['name'], 7) == 'vmanage':
+            print(
+                'MAIN: All devices configured.  Login to vManage using the MGMT interface IP: ' + device['vpn512_ip'] + '.')
+            connect_success = False
             try:
-                vmanage_ssh_config(device)
-                provisioned = False
-                while not provisioned:
-                    is_up = False
-                    # Check that host is up on VPN 512, responding to TCP/8443, and renders correct webpage.
-                    while not is_up:
-                        icmp = ping(device['vpn512_ip'], count=1)
-                        if icmp.packets_lost == 0.0:
-                            print('MAIN: vManage host ' + device['vpn512_ip'] + ' is online.  Checking sockets.')
-                            while not is_up:
-                                reply = check_socket(device)
-                                if reply:
-                                    if check_vmanage_webpage():
-                                        print('MAIN: HTML page is rendered and shows login.  ip_up set to true')
-                                        is_up = True
-                                        continue
-                                else:
-                                    print('MAIN: HTML page is NOT rendered.  Looping 10 seconds')
-                                    time.sleep(10)
-                            print('MAIN: Socket is not open.  Waiting 10 seconds')
-                            time.sleep(10)
-                    print('MAIN: vManage is responding to pings, port 8443 is open, and HTML page is being rendered.  '
-                          'Continuing to provision device via API.')
-                provision_vmanage_initial(device)
-
+                connect_success = ssh_connect(device)
             except NetmikoAuthenticationException as error:
-                print('MAIN: Authenticatino failed to ' + device['name'] + ':' + device['port'] + ' on VPN512 IP address ' + device['vpn512_ip'])
+                print('MAIN: Authentication failed to ' + device['name'] + ':' + device[
+                    'port'] + ' on VPN512 IP address ' + device['vpn512_ip'])
             except NetmikoTimeoutException as error:
-                print('MAIN: Connectino timed out to ' + device['name'] + ':' + device['port'] + ' on VPN512 IP address ' + device['vpn512_ip'])
+                print('MAIN: Connection timed out to ' + device['name'] + ':' + device[
+                    'port'] + ' on VPN512 IP address ' + device['vpn512_ip'])
+            if connect_success:
+                vmanage_ssh_config(device)
+            provisioned = False
+            is_up = False
+            while not provisioned:
+                # Check that host is up on VPN 512, responding to TCP/8443, and renders correct webpage.
+                is_up = False
+                while not is_up:
+                    if wait_timer('\nWaiting for ICMP to reply', device, function='ping_device', interval=5):
+                        if wait_timer('\nWaiting for TCP/8443 to reply', device, function='check_socket', interval=5):
+                            if wait_timer('\nWaiting for webpage to render', device, function='check_vmanage_webpage', interval=5):
+                                print('HTML page is rendered and shows login.  ip_up set to true')
+                                is_up = True
+                                break
+                            else:
+                                time.sleep(10)
+                        else:
+                            time.sleep(10)
+                print('MAIN: vManage is responding to pings, port 8443 is open, and HTML page is being rendered.  '
+                      'Continuing to provision device via API.')
+                provisioned = provision_vmanage_initial2(device)
+
+    if provisioned:
+        for device in v_devices:
+            if left(device['name'], 5) == 'vbond' or left(device['name'], 5) == 'vsmar':
+                if DEBUG:
+                    print('Finalizing ' + device['name'] + ' configuration.')
+                try:
+                    ssh_connect(device, device['vpn0_ip'])
+                except NetmikoAuthenticationException as error:
+                    print('MAIN: Authentication failed to ' + device['name'] + ':' + '22' + ' on VPN0 IP address ' + device['vpn0_ip'])
+                except NetmikoTimeoutException as error:
+                    print('MAIN: Connection timed out to ' + device['name'] + ':' +
+                          '22 on VPN0 IP address ' + device['vpn0_ip'])
+                ssh_obj = device['ssh_obj']
+                if ssh_obj is not None:
+
+                    config = open(device['post_config_file'], 'r')
+                    config_lines = config.readlines()
+                    for line in config_lines:
+                        ssh_obj.send_command(line, expect_string=device['name'] + r'.*#')
+                    ssh_obj.disconnect()
+                else:
+                    print('FAILED: Skipped post-configuration of ' + device['name'] + ' because SSH failed. ')
+            print('Finished configuration for ' + device['name'])
 
 
 def check_vmanage_webpage(device):
@@ -184,16 +229,15 @@ def check_vmanage_webpage(device):
 
     try:
         response = requests.get(url, verify=False)
-        print('Webpage reponse: ' + str(response.status_code))
 
         if re.search('j_username', response.text) is not None:
             print('Found username form in vManage webpage.')
             return True
         else:
-            print('Not found')
             return False
     except MaxRetryError as error:
-        print('Not found')
+        return False
+    except:
         return False
 
 
@@ -204,140 +248,301 @@ def check_socket(device):
     result = a_socket.connect_ex(location)
 
     if result == 0:
-        print('Port 8443 for vManage is open and responding to requests.')
+        print('\nPort 8443 for vManage is open and responding to requests.')
         return True
     else:
-        print('Port 8443 for vManage is not open')
         return False
 
 
-def provision_vmanage_initial(device):
-    obj = vmanage_lib(device['vpn512_ip'], device['username'], device['password'])
-    # Set Organization name
-    payload = {
-        'domain-id': '1',
-        'org': 'DEFAULT - 155893',
-        'password': 'insight',
-    }
-    obj.run_api('settings/configuration/organization', payload=payload, method='put')
+def provision_vmanage_initial2(device):
+    if DEBUG:
+        print('TESTING: Starting initial vManage configuration via API.')
+
+    # Instantiate session and login.
+    vmanage_sess = Authentication(host=device['vpn512_ip'], user=device['username'], password=device['preferred_password'],
+                          port=8443, validate_certs=False, timeout=20).login()
+
+    # Create new token for additional configuration that isn't included in API
+    vmanage_sess2 = vmanage_lib(device['vpn512_ip'], device['username'], device['preferred_password'])
+
+    # Instantiate all classes that we will need to use.  Login, Settings, Certificate, Device, Utilities
+    # vmanage_sess = vmanage_sess.login()
+    vmanage_settings = Settings(vmanage_sess, device['vpn512_ip'])
+    vmanage_certificate = Certificate(vmanage_sess, device['vpn512_ip'])
+    vmanage_device = Device(vmanage_sess, device['vpn512_ip'])
+    vmanage_utilities = Utilities(vmanage_sess, device['vpn512_ip'])
+
+    result = ""
+    vmanage_configured = False
+    vbond_configured = False
+    vsmart_configured = False
+
+    # Set organization Name
+    organization = 'DEFAULT - 155893'
+    if DEBUG:
+        print('Setting vmanage organization name to ' + organization + '.')
+    try:
+        result = vmanage_settings.set_vmanage_org(organization)
+        print('SUCCESS: Setting vmanage organization name to ' + organization + '.')
+    except Exception as e:
+        print(e)
 
     # Set vbond IP address in Administration -> Settings
-    payload = {
-        'domainIp': '2.2.2.1',
-        'port': 12346
-    }
-    obj.run_api('settings/configuration/device', payload, method='put')
+    vbond_ip = '51.51.51.2'
+    vbond_port = 12346
+    try:
+        result = vmanage_settings.set_vmanage_vbond(vbond_ip, vbond_port)
+        print('SUCCESS: set vbond IP in settings to ' + vbond_ip + ':' + str(vbond_port))
+    except Exception as e:
+        print(e)
 
-    # Set certificate to 'enterprise'
-    payload = {
-        'certificateSigning': 'enterprise'
-    }
-    response = obj.run_api('settings/configuration/certificate', payload, method='post')
+    # Set Certificate Authority to Enterprise
+    try:
+        result = vmanage_settings.set_vmanage_ca_type('enterprise')
+        print('SUCCESS: set Certificate Authority to ''enterprise''')
+    except Exception as e:
+        print(e)
 
     # Import enterprise ROOTCA.pem file into Administration -> certificates
     if DEBUG:
-        print('Importing enterprise ROOTCA.pem file into vManage')
-    device['root_ca_cert'] = vshell_config(device, 'cat vmanage.crt')
-    payload = {'enterpriseRootCA': device['root_ca_cert']}
+        print('Importing enterprise ROOTCA.pem file into vManage.')
+    data = device['root_ca_cert']
+    try:
+        vmanage_settings.set_vmanage_root_cert(data)
+        print('SUCCESS: Importing ROOTCA.pem file into vManage.')
+    except Exception as e:
+        print(e)
 
-    response = obj.run_api('settings/configuration/certificate/enterpriserootca', payload, method='put')
+    # Determine if vmanage, vsmart, and vbond are already configured
+    try:
+        response = vmanage_device.get_device_list('controllers')
+        for item in response:
+            if item['deviceIP'] == device['system_ip'] or item['deviceIP'] == device['vpn0_ip']:
+                if item['serialNumber'] != '' and item['serialNumber'] != 'No certificate installed':
+                    print('vManage has had a certificate installed.  Skipping CSR generation, sign, and import.')
+                    vmanage_configured = True
+            elif item['deviceIP'] == vBond['system_ip'] or item['deviceIP'] == vBond['vpn0_ip']:
+                if item['serialNumber'] != '' and item['serialNumber'] != 'No certificate installed':
+                    print('vBond has had a certificate installed.  Skipping CSR generation, sign, and import.')
+                    vbond_configured = True
+            elif item['deviceIP'] == vSmart['system_ip'] or item['deviceIP'] == vSmart['vpn0_ip']:
+                if item['serialNumber'] != '' and item['serialNumber'] != 'No certificate installed':
+                    print('vSmart has had a certificate installed.  Skipping CSR generation, sign, and import.')
+                    vsmart_configured = True
 
-    # Generate CSR for vmanage
-    if DEBUG:
-        print('Generating CSR for vManage')
-    payload = {'deviceIP': device['system_ip']}
-    response = obj.run_api('certificate/generate/csr', payload, method='post')
-    device['CSR'] = vshell_config(device, 'cat vmanage_csr')
-    # Sign CSR for vmanage
-    if DEBUG:
-        print('Sign CSR for vManage on vshell console')
+    except Exception as e:
+        print(e)
 
-    vmanage_sign = '''
-    openssl x509 -req -in vmanage_csr \
-    -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
-    -out vmanage.crt -days 2000 -sha256
-    '''
-    vshell_config(device, vmanage_sign)
-    device['CRT'] = vshell_config(device, 'cat vmanage.crt')
-    # Import the vmanage CRT into application
-    if DEBUG:
-        print('Import vManage CRT into vManage')
-    payload = device['CRT']
-    response = obj.run_api('certificate/install/signedCert', payload, method='post')
+    if not vmanage_configured:
+        # Generate CSR for vmanage
+        if DEBUG:
+            print('Generating CSR for vManage.')
+        data = device['system_ip']
+        try:
+            vmanage_certificate.generate_csr(data)
+            print('SUCCESS: Generated CSR for vManage ' + device['system_ip'])
+        except Exception as e:
+            print('FAILED: ' + e)
 
-    # Import the WAN edge file
-    files = [
-        ("file", ("DEFAULT - 155893.viptela", open("C:/Users/Tony Curtis/Desktop/DEFAULT - 155893.viptela", "rb"),
-                  "application/octet-stream"))
-    ]
-    payload = [{"validity": "valid", "upload": True}]
-    response = obj.run_api('system/device/fileupload', payload, files=files, method='post',
-            headers=None)
-    if response.status_code == 200:
-        response_dict = json.loads(response.text)
-        upload_status = response_dict['vedgeListUploadStatus']
-        status_code = response_dict['vedgeListStatusCode']
-        activity_list = response_dict['activityList']
-        print('WAN Edge Upload status: ' + upload_status)
+        # Get CSR for vManage
+        if DEBUG:
+            print('Getting CSR for vManage and writing to file.')
+        try:
+            response = vmanage_device.get_device_list('controllers')
+            for item in response:
+                if item['deviceIP'] == device['system_ip']:
+                    device['CSR'] = item['deviceCSR'].strip()
+                    print('SUCCESS: Generated new CSR: \n' + device['CSR'])
+        except Exception as e:
+            print(e)
 
+        # Sign CSR on vshell
+        if DEBUG:
+            print('Sign CSR for vManage on vshell console')
+
+        vmanage_sign = 'openssl x509 -req -in vmanage_csr -CA ROOTCA.pem -CAkey \
+         ROOTCA.key -CAcreateserial -out vmanage.crt -days 2000 -sha256'
+        try:
+            reply = vshell_config(device, vmanage_sign)
+            print('SUCCESS:  Signed CSR on vshell.')
+        except Exception as e:
+            print(e)
+
+        # Copy vmanage CRT into dictionary
+        device['CRT'] = vshell_config(device, 'cat vmanage.crt')
+
+        # Import the vmanage CRT into application
+        if DEBUG:
+            print('Import vManage CRT into vManage')
+        try:
+            reply = vmanage_certificate.install_device_cert(device['CRT'])
+            print('SUCCESS: Imported vManage CRT.')
+        except Exception as e:
+            print(e)
 
     # Add vbond to devices
-    payload = {
-        "deviceIP": "51.51.51.2",
-        "username": "admin",
-        "password": "insight",
-        "personality": "vbond",
-        "generateCSR": True
-    }
-    response = obj.run_api('system/device', payload, method='post')
+    if not vbond_configured:
+        if DEBUG:
+            print('Adding vbond device to vmanage application.')
+        payload = {
+            "deviceIP": "51.51.51.2",
+            "username": "admin",
+            "password": "insight",
+            "personality": "vbond",
+            "generateCSR": True
+        }
+        try:
+            response = vmanage_sess2.run_api('system/device', payload, method='post')
+            print('SUCCESS: Added vbond device ' + vBond['system_ip'])
+        except:
+            print('FAILED: Cannot add vbond device: ' + device['vpn512_ip'] + '.')
 
+        device_list = ""
+        print('Waiting 30 seconds for CSR to be generated.')
+        time.sleep(30)
 
-    # Add vsmart to devices
-    payload = {
-        "deviceIP": "51.51.51.3",
-        "username": "admin",
-        "password": "insight",
-        "protocol": "DTLS",
-        "personality": "vsmart",
-        "generateCSR": True
-    }
-    response = obj.run_api('system/device', payload, method='post')
+        try:
+            device_list = vmanage_device.get_device_list('controllers')
+            print('SUCCESS:  Retrieved list of controllers to parse for CSRs from vmanage.')
+        except Exception as e:
+            print('FAILED: Unable to get device list to scan for vBond CSR.')
 
-    # Get vbond and vSmart certificates
-    response = obj.run_api('certificate/device/list')
-    response_text = json.loads(response.text)
-    for item in response_text['data']:
-        if 'deviceIP' in item:
-            if item['deviceIP'] == vBond['vpn0_ip']:
-                vBond['CSR'] = item['deviceCSR']
-                file_obj = open(r'vbond.csr', 'w')
-                file_obj.write(vBond['CSR'])
-                file_obj.close()
-            elif item['deviceIP'] == vSmart['vpn0_ip']:
-                vSmart['CSR'] = item['deviceCSR']
-                file_obj = open(r'vsmart.csr', 'w')
-                file_obj.write(vBond['CSR'])
-                file_obj.close()
+        if isinstance(device_list, list):
+            for item in device_list:
+                if 'deviceIP' in item:
+                    if item['deviceIP'] == vBond['system_ip'] or item['deviceIP'] == vBond['vpn0_ip']:
+                        vBond['CSR'] = item['deviceCSR'].strip()
+                        if vBond['CSR'] != '':
+                            print('SUCCESS: Found vBond CSR.')
 
-    # Upload the certificates to vManage via SFTP
+        if vBond['CSR'] != '':
+            # Write the CSR to file so we can SCP it to sign on vmanage
+            print('Write vBond CSR to file.')
+            file_obj = open(r'vbond.csr', 'w')
+            file_obj.write(vBond['CSR'])
+            file_obj.close()
 
-    copy_file(device, source_file='vbond.csr')
-    copy_file(device, source_file='vsmart.csr')
+            # Upload the certificates to vManage via SFTP
+            copy_file(device, source_file='vbond.csr')
 
-    # Sign vbond and vsmart certs
-    vbond_sign = '''
-    openssl x509 -req -in vbond.csr \
-    -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
-    -out vbond.crt -days 2000 -sha256
-    '''
-    vsmart_sign = '''
-    openssl x509 -req -in vsmart.csr \
-    -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
-    -out vsmart.crt -days 2000 -sha256
-    '''
-    vshell_config(device, vbond_sign)
-    vshell_config(device, vsmart_sign)
+            # Sign vbond and vsmart certs
+            vbond_sign = '''
+            openssl x509 -req -in vbond.csr \
+            -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
+            -out vbond.crt -days 2000 -sha256
+            \n
+            '''
+
+            response = vshell_config(device, vbond_sign)
+
+            # Get vbond CRT created in previous step
+            vBond['CRT'] = vshell_config(device, 'cat vbond.crt')
+
+            # Import the vbond CRT into application
+            if DEBUG:
+                print('Import vBond CRT into vManage.')
+            try:
+                reply = vmanage_certificate.install_device_cert(vBond['CRT'])
+                print('SUCCESS: Imported vBond CRT.')
+            except Exception as e:
+                print('FAILED: ', end='')
+                print(e)
+        else:
+            print('Unable to read CSR for vSmart.  Import certificates manually.')
+
+    # If vsmart not configured, create CSR, sign, and import certificate into vmanage.
+    if not vsmart_configured:
+        # Add vsmart to devices
+        if DEBUG:
+            print('Adding vsmart device to vmanage application.')
+        payload = {
+            "deviceIP": "51.51.51.3",
+            "username": "admin",
+            "password": "insight",
+            "protocol": "DTLS",
+            "personality": "vsmart",
+            "generateCSR": True
+        }
+        try:
+            response = vmanage_sess2.run_api('system/device', payload, method='post')
+            print('SUCCESS: Added vsmart device: ' + device['vpn512_ip'] + '.')
+        except:
+            print('FAILED: Cannot add vsmart device: ' + device['vpn512_ip'] + '.')
+
+        # Get vSmart CSR
+        device_list = ""
+        print('Waiting 30 seconds for CSR to be generated.')
+        time.sleep(30)
+        try:
+            device_list = vmanage_device.get_device_list('controllers')
+            print('SUCCESS:  Retrieved list of controllers to parse for CSRs from vmanage.')
+        except Exception as e:
+            print('FAILED: Unable to get device list to scan for vSmart CSR.')
+
+        if isinstance(device_list, list):
+            for item in device_list:
+                if 'deviceIP' in item:
+                    if item['deviceIP'] == vSmart['system_ip'] or item['deviceIP'] == vSmart['vpn0_ip']:
+                        vSmart['CSR'] = item['deviceCSR'].strip()
+                        if vSmart['CSR'] != '':
+                            print('SUCCESS: Found vSmart CSR.')
+        response = ""
+        try:
+            response = vmanage_device.get_device_list('controllers')
+        except Exception as e:
+            print('FAILED: Unable to get device list to scan for vSmart CSR.')
+
+        if isinstance(device_list, dict):
+            for item in response:
+                if 'deviceIP' in item:
+                    if item['deviceIP'] == vSmart['system_ip'] or item['deviceIP'] == vSmart['vpn0_ip']:
+                        vSmart['CSR'] = item['deviceCSR'].strip()
+                        if vSmart['CSR'] != '':
+                            print('SUCCESS: Found vSmart CSR.')
+
+        if vSmart['CSR'] != '':
+            print('Write vSmart CSR to file.')
+            file_obj = open(r'vsmart.csr', 'w')
+            file_obj.write(vSmart['CSR'])
+            file_obj.close()
+
+            # Upload the certificates to vManage via SFTP
+            copy_file(device, source_file='vsmart.csr')
+
+            # Sign vsmart certs
+            vsmart_sign = '''
+            openssl x509 -req -in vsmart.csr \
+            -CA ROOTCA.pem -CAkey ROOTCA.key -CAcreateserial \
+            -out vsmart.crt -days 2000 -sha256
+            \n
+            '''
+            vshell_config(device, vsmart_sign)
+
+            # Get vSmart CRT created in previous step
+            vSmart['CRT'] = vshell_config(device, 'cat vsmart.crt')
+
+            # Import the vsmart CRT into application
+            if DEBUG:
+                print('Import vSmart CRT into vManage.')
+            try:
+                reply = vmanage_certificate.install_device_cert(vSmart['CRT'])
+                print('SUCCESS: Imported vSmart CRT.')
+            except Exception as e:
+                print(e)
+        else:
+            print('Unable to read CSR for vSmart.  Import certificates manually.')
+
+    # Upload WAN Edge file
+    data = 'DEFAULT - 155893.viptela'
+    try:
+        response = vmanage_utilities.upload_file(data)
+        print('SUCCESS: Uploaded WAN edge file ' + data + '.')
+    except Exception as e:
+        print('FAILED: Unable to upload the WAN edge file.')
+
     device['provisioned'] = True
+
+    return True
 
 
 def copy_file(device, method="SFTP", source_file=None, dest_file=None):
@@ -345,7 +550,7 @@ def copy_file(device, method="SFTP", source_file=None, dest_file=None):
         dest_file = source_file
 
     transport = paramiko.Transport(device['vpn512_ip'], 22)
-    transport.connect(username=device['username'], password=device['password'])
+    transport.connect(username=device['username'], password=device['preferred_password'])
 
     sftp = paramiko.SFTPClient.from_transport(transport)
 
@@ -357,19 +562,12 @@ def copy_file(device, method="SFTP", source_file=None, dest_file=None):
 
 
 def vshell_config(v_device, command):
-    new_device = {
-        'device_type': 'generic',
-        'host': v_device['vpn512_ip'],
-        'username': v_device['username'],
-        'password': v_device['password'],
-    }
+    ssh_obj = v_device['ssh_obj']
 
-    net_connect = ConnectHandler(**new_device)
-    shell_name = v_device['name'] + ':~$'
-    reply = net_connect.send_command('vshell', expect_string='$')
-    reply += net_connect.send_command(command)
+    reply = ssh_obj.send_command('vshell', expect_string='$')
+
+    reply = ssh_obj.send_command(command, expect_string='$')
     print(reply)
-    net_connect.disconnect()
     return reply
 
 
@@ -405,47 +603,62 @@ def vmanage_sign_certs(device):
     net_connect.disconnect()
 
 
-def vmanage_ssh_config(device):
+def ssh_connect(device, host=''):
     new_device = {
         'device_type': 'generic',
         'host': device['vpn512_ip'],
         'username': device['username'],
-        'password': device['password'],
+        'password': device['preferred_password'],
     }
+    if host != '':
+        new_device['host'] = host
 
-    net_connect = ConnectHandler(**new_device)
-    print('Found the prompt to ' + device['name'] + ':' + device['port'] + ' - ' + net_connect.find_prompt())
-    # reply = net_connect.send_command('vshell', expect_string=device['name'] + ':~$')
-    shell_name = device['name'] + ':~$'
-    show_int = net_connect.send_command('show int | tab\n')
-    print(show_int)
-    reply = net_connect.send_command('vshell', expect_string='$')
-    reply = net_connect.send_command('ls -al', expect_string='$')
-    print(reply)
-    generate_root_ca_key = 'openssl genrsa -out ROOTCA.key 2048'
-    reply = net_connect.send_command(generate_root_ca_key, expect_string='$')
-    print(reply)
-    generate_root_ca_cert = 'openssl req -x509 -new -nodes -key ROOTCA.key -sha256 -days 2000 -subj ' \
-             '"/C=US/ST=AZ/L=PHX/O=testlab/CN=vmanage.lab" -out ROOTCA.pem'
-    reply = net_connect.send_command(generate_root_ca_cert, expect_string='$')
-    print(reply)
-    reply = net_connect.send_command('openssl genrsa -out ROOTCA.key 2048', expect_string='$')
-    print(reply)
-    reply = net_connect.send_command('cat ROOTCA.key', expect_string='$')
-    print(reply)
-    device['root_ca_cert'] = net_connect.send_command('cat ROOTCA.pem', expect_string='$')
-    print(device['root_ca_cert'])
+    device['ssh_obj'] = ConnectHandler(**new_device)
 
-    reply = net_connect.send_command('ls -al', expect_string='$')
-    print(reply)
-    net_connect.disconnect()
+    return True
 
+
+def vmanage_ssh_config(device):
+    dir_listing = vshell_config(device, 'ls -al')
+    dir_listing = dir_listing.split('\n')
+    key_exist = False
+    pem_exist = False
+
+    for line in dir_listing:
+        if re.search('ROOTCA.key', line) is not None:
+            print('ROOTCA.key file already exists.  Skipping key creation.')
+            key_exist = True
+        elif re.search('ROOTCA.pem', line) is not None:
+            print('ROOTCA.pem file already exists.  Skipping pem creation.')
+            pem_exist = True
+    if not key_exist:
+        if DEBUG:
+            print('Generating ROOTCA.key file')
+        generate_root_ca_key = 'openssl genrsa -out ROOTCA.key 2048'
+        reply = vshell_config(device, generate_root_ca_key)
+        print(reply)
+
+    if not pem_exist:
+        if DEBUG:
+            print('Generating ROOTCA.pem file')
+        cert_req = '''openssl req -x509 -new -nodes -key ROOTCA.key -sha256 -days 2000 -subj \
+        "/C=AU/ST=NSW/L=NSW/O=sdwan-testlab/CN=vmanage.lab" -out ROOTCA.pem
+        '''
+        reply = vshell_config(device, cert_req)
+        print(reply)
+
+    if DEBUG:
+        print('Getting contents of ROOTCA.pem')
+    vshell_config(device, '\n')
+    reply = vshell_config(device, 'cat ROOTCA.pem')
+    device['root_ca_cert'] = reply
 
 
 def get_mgmt_if(telnet_obj, device):
     if DEBUG:
         print(device['thread_header'] + 'Getting MGMT IP for vManage')
-    reply = telnet_obj.write(b'show int | tab\n')
+    telnet_obj.write(b'show int | tab | include 512\n')
+    reply = telnet_obj.read_until(device['name'].encode('ascii') + b'#', 5).decode()
     reply = reply.split('\n')
     x = 1
     for line in reply:
@@ -457,7 +670,6 @@ def get_mgmt_if(telnet_obj, device):
             CIDR = split_line[3]
             ipv4 = CIDR.split('/')
             ipv4 = ipv4[0]
-            print(ipv4)
             if left(ipv4, 1) == 0:
                 print('VMANAGE: GET_VPN512_IP: Invalid IPv4 Address found.  Enter correct IPv4 address to continue.')
             else:
@@ -547,51 +759,51 @@ def configure_viptela_pod(device, thread_name, counter):
     # If it does not respond, continue with configuration.
     while not device['is_configured']:
         if ping_host(device['vpn0_ip']):
-            print(device['thread_header'] + device['name'] + '(' +
-                  device['vpn0_ip'] +
-                  ') is active!')
+            print('\n' + device['thread_header'] + device['name'] + '(' +
+                  device['vpn0_ip'] + ') is active!')
             device['is_configured'] = True
 
         else:
-            print(device['thread_header'] + device['name'] + '(' +
+            print('\n' + device['thread_header'] + device['name'] + '(' +
                   device['vpn0_ip'] +
                   ') is NOT active.  Attempting to configure.')
             config = open(device['initial_config_file'], 'r')
             config_lines = config.readlines()
             try:
                 if DEBUG:
-                    print(device['thread_header'] + 'Launching telnet session to ' + HOST + ':' + device['port'])
+                    print('\n' + device['thread_header'] + 'Launching telnet session to ' + HOST + ':' + device['port'])
                 tn = telnetlib.Telnet(HOST, device['port'])
                 if DEBUG:
-                    print(device['thread_header'] + 'Logging into ' + HOST + ':' + device['port'])
+                    print('\n' + device['thread_header'] + 'Logging into ' + HOST + ':' + device['port'])
                 successful, telnet_idx, telnet_obj, telnet_output = login2(tn, device)
                 if device['name'] == 'vmanage' and not device['is_configured']:
                     if DEBUG:
-                        print(device['thread_header'] + 'Pre-configuring vManage.  This process will take 15-30 minutes')
+                        print('\n' + device['thread_header'] + 'Pre-configuring vManage.  This process will take 15-30 minutes')
                     pre_config_completed = pre_config_vmanage(device, tn, telnet_idx, telnet_obj, telnet_output)
                     if pre_config_completed:
                         successful = login2(tn, device)
                 if successful:
-                    print(device['thread_header'] + 'Successfully pre-configured vManage.  Moving onto general configuration.')
+                    print('\n' + device['thread_header'] + 'Successfully pre-configured vManage.  Moving onto general configuration.')
                     write_config(tn, device, config_lines)
                     if device['name'] == 'vmanage':
                         # Wait 10 seconds for DHCP to assign IP
                         time.sleep(10)
                         vmanage_vpn512_ip = get_mgmt_if(tn, device)
                         device['vpn512_ip'] = vmanage_vpn512_ip
-                print(device['thread_header'] + 'MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
+                    tn.close()
+                print('\n' + device['thread_header'] + 'MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
                 if tn.sock:
                     tn.close()
-                    print(device['thread_header'] + 'MAIN: Closing telnet connection for device ' + device['name'])
+                    print('\n' + device['thread_header'] + 'MAIN: Closing telnet connection for device ' + device['name'])
                 else:
-                    print(device['thread_header'] + 'MAIN: Closing telnet connection for device ' + device['name'])
+                    print('\n' + device['thread_header'] + 'MAIN: Closing telnet connection for device ' + device['name'])
 
             except ConnectionRefusedError as error:
-                print(device['thread_header'] + 'Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
+                print('\n' + device['thread_header'] + 'Connection was refused to ' + HOST + ' on port ' + device['port'] + '.')
             except BrokenPipeError as error:
-                print(device['thread_header'] + 'Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
+                print('\n' + device['thread_header'] + 'Connection was broken to host: ' + HOST + ' on port ' + device['port'] + '.')
             except EOFError as error:
-                print(device['thread_header'] + 'Connection to host was lost: ' + HOST)
+                print('\n' + device['thread_header'] + 'Connection to host was lost: ' + HOST)
             time.sleep(30)
 
 
@@ -630,7 +842,8 @@ def login2(telnet_obj, device):
             if return_val is not b' ':
                 time.sleep(3)
                 completed_login = False
-                print(device['thread_header'] + 'LOGIN: INITIALIZE: vManage is Ready. Logging in now.')
+                print(device['thread_header'] + 'LOGIN: INITIALIZE: ' + device['name'] +
+                      'vManage is Ready. Logging in now.')
                 telnet_obj.write(b'\n')
                 while not completed_login:
                     idxx, objx, outputx = telnet_obj.expect(prompts, 5)
@@ -783,7 +996,7 @@ def format_time(input):
     return output
 
 
-def wait_timer(message, device, wait_string, telnet_obj=None, interval=30, max_time=3600):
+def wait_timer(message, device, wait_string='', telnet_obj=None, interval=30, max_time=3600, function=''):
     start_time = time.time()
     time_delta = 0
     hours = '00'
@@ -804,14 +1017,28 @@ def wait_timer(message, device, wait_string, telnet_obj=None, interval=30, max_t
     print(device['thread_header'] + 'Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
     # Check to see if max timer has expired
     while max_time > 0:
+        result = False
         if max_time - interval < 0:
             interval = max_time
         max_time = beginning_max_time
-        output = telnet_obj.read_until(wait_string, interval)
-        s = output.decode()
-        if re.search(wait_string_str, s) is not None:
-            max_time = 0
-            return True
+        if telnet_obj is not None:
+            output = telnet_obj.read_until(wait_string, interval)
+            s = output.decode()
+            if re.search(wait_string_str, s) is not None:
+                max_time = 0
+                return True
+        if function == 'check_socket':
+            result = check_socket(device)
+            if result:
+                return True
+        elif function == 'check_vmanage_webpage':
+            result = check_vmanage_webpage(device)
+            if result:
+                return True
+        elif function == 'ping_device':
+            result = ping_device(device)
+            if result:
+                return True
         now_time = time.time()
         time_delta = int(now_time - start_time)
         max_time = max_time - time_delta
@@ -823,10 +1050,22 @@ def wait_timer(message, device, wait_string, telnet_obj=None, interval=30, max_t
             time_delta = time_delta - int(minutes) * 60
 
         seconds = format_time(time_delta)
-        print('', end='\r')
-        print(device['thread_header'] + 'Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
+        print('\r' + device['thread_header'] + 'Elapsed Time: ' + str(hours) + ':' + str(minutes) + ':' + str(seconds), end=' ')
+        if telnet_obj is None:
+            time.sleep(interval)
     print('\n' + device['thread_header'] + 'Time has elapsed on the wait timer function.')
+
     return False
+
+
+def ping_device(device):
+    icmp = ping(device['vpn512_ip'], count=1)
+    if icmp.packets_lost == 0.0:
+        print('\nHost is online.')
+        return True
+    else:
+        return False
+
 
 
 def pre_config_vmanage(device, telnet_obj, input_idx, input_obj, input_output):
@@ -863,13 +1102,14 @@ def pre_config_vmanage(device, telnet_obj, input_idx, input_obj, input_output):
             telnet_obj.write(b'y\n')
             # Reboot will take 30+ minutes to complete.  Set timer at 40 minutes and watch for 'System Ready' message
             print(device['thread_header'] +
-                  'PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  '
-                  'This process could take from between 10 and 60 minutes.')
+                  'PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  ')
 
             timer_response = wait_timer('Waiting for vManage to start reboot.  DO NOT SHUT DOWN VMANAGE.',
                                         device, b'Restarting system', telnet_obj=telnet_obj, interval=5, max_time=1200)
             if timer_response:
-                print('\n' + device['thread_header'] + 'PRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting')
+                print('\n' + device['thread_header'] + 'PRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting.  '
+                                                       'This should not take more than 5-10 minutes. If it does, '
+                                                       'stop the vmanage device in EVE-NG and start it again.')
             else:
                 print(device['thread_header'] + 'PRE-CONFIG:VMANAGE:FAILURE: vManage reboot is not starting as expected.')
 

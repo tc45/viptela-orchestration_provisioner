@@ -82,8 +82,19 @@ class vmanage_lib:
             if headers['Content-Type'] == 'application/json':
                 payload = json.dumps(payload)
         response = self.session[self.vmanage_ip].post(url, data=payload, headers=headers, files=files, verify=False)
-            # print('ERROR: Value error supplied for this job.  Message: ' + error.args[0])
         return response
+
+    def post_json_request(self, mount_point, payload, files=None, headers=''):
+        """POST JSON request"""
+        url = "https://%s:8443/dataservice/%s" % (self.vmanage_ip, mount_point)
+        print('Pushing JSON payload to: ' + url)
+        response = None
+        if headers is not None:
+            if headers['Content-Type'] == 'application/json':
+                payload = json.dumps(payload)
+        response = self.session[self.vmanage_ip].post(url, json=payload, headers=headers, files=files, verify=False)
+        return response
+
 
     def put_request(self, mount_point, payload, files=None, headers=''):
         """PUT request"""
@@ -95,7 +106,7 @@ class vmanage_lib:
         response = self.session[self.vmanage_ip].put(url, data=payload, headers=headers, files=files, verify=False)
         return response
 
-    def run_api(self, mount_point, payload=None, method='get', files=None, headers=''):
+    def run_api(self, mount_point, payload=None, method='get', files=None, headers='', cert=None):
         response = None
         if headers is None:
             pass
@@ -119,6 +130,11 @@ class vmanage_lib:
                 response = self.put_request(mount_point, payload, files=files, headers=headers)
             else:
                 response = self.put_request(mount_point, payload, headers=headers)
+        elif method == 'post_json':
+            if files is not None:
+                response = self.post_json_request(mount_point, payload, files=files, headers=headers)
+            else:
+                response = self.post_json_request(mount_point, payload, headers=headers)
         print(str(response.status_code) + ' ' + response.reason)
         if response.status_code != 200:
             print(response.content.decode())
