@@ -27,6 +27,7 @@ from vmanage.api.settings import Settings
 from vmanage.api.authentication import Authentication
 from vmanage.api.utilities import Utilities
 from vmanage.api.device import Device
+import ipaddress
 
 
 class myThread (threading.Thread):
@@ -58,31 +59,10 @@ if DEBUG:
 
 # Create vManage, vBond, and vSmart objects.  Associate default configuration files with each object.  Add to list.
 
-vManage2 = {
-    'name': 'vmanage',
-    'port': '32793',
-    'system_ip': '1.1.1.5',
-    'mgmt_ip': '172.28.43.175',
-    'console_host': '',
-    'username': 'admin',
-    'password': 'admin',
-    'preferred_password': 'insight',
-    'vpn0_ip': '51.51.51.5',
-    'is_configured': False,
-    'initial_config_file': 'configs/vmanage2-initial.txt',
-    'thread_header': '',
-    'vpn512_ip': '172.28.43.179',
-    'root_ca_cert': '',
-    'CSR': '',
-    'CRT': '',
-    'provisioned': '',
-    'ssh_obj': None,
-}
 vSmart = {
     'name': 'vsmart',
     'port': '32770',
     'system_ip': '1.1.1.3',
-    'mgmt_ip': '172.28.43.172',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -101,7 +81,6 @@ vBond = {
     'name': 'vbond',
     'port': '32771',
     'system_ip': '1.1.1.2',
-    'mgmt_ip': '172.28.43.173',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -120,7 +99,6 @@ vManage = {
     'name': 'vmanage',
     'port': '32769',
     'system_ip': '1.1.1.1',
-    'mgmt_ip': '172.28.43.174',
     'console_host': '',
     'username': 'admin',
     'password': 'admin',
@@ -129,7 +107,7 @@ vManage = {
     'is_configured': False,
     'initial_config_file': 'configs/vmanage-initial.txt',
     'thread_header': '',
-    'vpn512_ip': '172.28.43.174',
+    'vpn512_ip': '',
     'root_ca_cert': '',
     'CSR': '',
     'CRT': '',
@@ -162,7 +140,7 @@ def main():
 
         if track_configured == len(v_devices):
             ALL_COMPLETE = True
-
+        print('All threads for pre-configure are completed.  Moving onto vManage configuration.')
     for device in v_devices:
         if left(device['name'], 7) == 'vmanage':
             print(
@@ -222,6 +200,11 @@ def main():
                     print('FAILED: Skipped post-configuration of ' + device['name'] + ' because SSH failed. ')
             print('Finished configuration for ' + device['name'])
 
+
+    # TODO: Cleanup files created
+    # TODO: Exit telnet sessions
+    # TODO: Loop continuously so it can persistently run in backgroun.
+    # TODO: Check for things like ORG name, vbond, etc before changing them.  Get all values, then if values dont' exist, add.
 
 def check_vmanage_webpage(device):
     requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -655,28 +638,77 @@ def vmanage_ssh_config(device):
 
 
 def get_mgmt_if(telnet_obj, device):
+    prompts = [
+        device['name'].encode('utf-8') + b'#',
+        'vedge'.encode('utf-8') + b'#',
+    ]
+    retries = 5
+
+    while retries > 0:
+        x = 1
+        telnet_obj.write(b'show int | tab | include 512\n')
+        reply = telnet_obj.read_until(device['name'].encode('utf-8') + b'#', timeout=10).decode()
+        reply = reply.split('\n')
+        for line in reply:
+            if re.search('^(512).*', line) is not None:
+                if DEBUG:
+                    print('Found VPN 512 in line ' + str(x))
+                split_line = ' '.join(line.split()).split()
+                # split_line = line.split(' ')
+                CIDR = split_line[3]
+                ipv4 = CIDR.split('/')
+                ipv4 = ipv4[0]
+                try:
+                    network = ipaddress.IPv4Network(ipv4)
+                except ValueError:
+                    if DEBUG:
+                        print(device['thread_header'] + ' GET_VPN512_IP: Did not find a valid IPv4 address for vpn512.  Trying again.')
+                    retries -= 1
+                    time.sleep(15)
+                    continue
+                if left(ipv4, 7) == '0.0.0.0':
+                    if DEBUG:
+                        print(device['thread_header'] + ' GET_VPN512_IP: IP 0.0.0.0 found, which is not valid.  Trying again.')
+
+                    retries -= 1
+                    print(str(retries) + ' retries left.')
+                    time.sleep(15)
+                    continue
+                else:
+                    return True, ipv4
+                x += 1
+
+    # If no IPv4 found, return false and blank data
+    return False, ''
+
+
+def get_mgmt_if_old(telnet_obj, device):
     if DEBUG:
         print(device['thread_header'] + 'Getting MGMT IP for vManage')
-    telnet_obj.write(b'show int | tab | include 512\n')
-    reply = telnet_obj.read_until(device['name'].encode('ascii') + b'#', 5).decode()
-    reply = reply.split('\n')
-    x = 1
-    for line in reply:
-        if re.search('^(512).*', line) is not None:
-            if DEBUG:
-                print('Found VPN 512 in line ' + str(x))
-            split_line = ' '.join(line.split()).split()
-            # split_line = line.split(' ')
-            CIDR = split_line[3]
-            ipv4 = CIDR.split('/')
-            ipv4 = ipv4[0]
-            if left(ipv4, 1) == 0:
-                print('VMANAGE: GET_VPN512_IP: Invalid IPv4 Address found.  Enter correct IPv4 address to continue.')
-            else:
+    retry = 5
 
-                print('VMANAGE: GET_VPN512_IP: Found IPv4 address ' + ipv4 + '.')
-                return ipv4
-            x += 1
+    while retry > 0:
+        telnet_obj.write(b'show int | tab | include 512\n')
+        reply = telnet_obj.read_until(device['name'].encode('ascii') + b'#', 5).decode()
+        reply = reply.split('\n')
+        x = 1
+        for line in reply:
+            if re.search('^(512).*', line) is not None:
+                if DEBUG:
+                    print('Found VPN 512 in line ' + str(x))
+                split_line = ' '.join(line.split()).split()
+                # split_line = line.split(' ')
+                CIDR = split_line[3]
+                ipv4 = CIDR.split('/')
+                ipv4 = ipv4[0]
+                if left(ipv4, 1) == 0:
+                    print('VMANAGE: GET_VPN512_IP: Invalid IPv4 Address found.  Enter correct IPv4 address to continue.')
+                else:
+
+                    print('VMANAGE: GET_VPN512_IP: Found IPv4 address ' + ipv4 + '.')
+                    is_mgmt_ip_found = True
+                    return ipv4
+                x += 1
 
 def threads():
     if DEBUG:
@@ -788,8 +820,11 @@ def configure_viptela_pod(device, thread_name, counter):
                     if device['name'] == 'vmanage':
                         # Wait 10 seconds for DHCP to assign IP
                         time.sleep(10)
-                        vmanage_vpn512_ip = get_mgmt_if(tn, device)
-                        device['vpn512_ip'] = vmanage_vpn512_ip
+                        mgmt_success, device['vpn512_ip'] = get_mgmt_if(tn, device)
+                        if mgmt_success:
+                            print('VMANAGE: GET_VPN512_IP: Found IPv4 address ' + device['vpn512_ip'] + '.')
+                        else:
+                            print('VMANAGE: GET_VPN512_IP: Could not find IPv4 Address.')
                     tn.close()
                 print('\n' + device['thread_header'] + 'MAIN: Attempted completion of device ' + device['name'] + ' is now completed.')
                 if tn.sock:
@@ -843,7 +878,7 @@ def login2(telnet_obj, device):
                 time.sleep(3)
                 completed_login = False
                 print(device['thread_header'] + 'LOGIN: INITIALIZE: ' + device['name'] +
-                      'vManage is Ready. Logging in now.')
+                      ' is ready. Logging in now.')
                 telnet_obj.write(b'\n')
                 while not completed_login:
                     idxx, objx, outputx = telnet_obj.expect(prompts, 5)
@@ -1104,7 +1139,7 @@ def pre_config_vmanage(device, telnet_obj, input_idx, input_obj, input_output):
             print(device['thread_header'] +
                   'PRE-CONFIG:VMANAGE: vManage needs to prepare the hard drive and reboot.  ')
 
-            timer_response = wait_timer('Waiting for vManage to start reboot.  DO NOT SHUT DOWN VMANAGE.',
+            timer_response = wait_timer(device['thread_header'] + 'Waiting for vManage to start reboot.  DO NOT SHUT DOWN VMANAGE.',
                                         device, b'Restarting system', telnet_obj=telnet_obj, interval=5, max_time=1200)
             if timer_response:
                 print('\n' + device['thread_header'] + 'PRE-CONFIG:VMANAGE:SUCCESS: Reboot is starting.  '
@@ -1152,7 +1187,7 @@ def write_config(telnet_obj, device, config):
                 telnet_obj.write(line.encode())
             output = telnet_obj.expect(prompts, 60)
             if output is not b'':
-                print('WRITE_CONFIG: Finished sending commands.  Leaving function.')
+                print(device['thread_header'] + 'WRITE_CONFIG: Finished sending commands.  Leaving function.')
                 is_config_applied = True
                 i = max_retry + 1
             else:

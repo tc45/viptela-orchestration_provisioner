@@ -150,49 +150,49 @@ def main(args):
         return
     vmanage_ip, username, password = args[0], args[1], args[2]
     obj = vmanage_lib(vmanage_ip, username, password)
-    # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
-    run_api(obj, 'system/device/vedges')
-    # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
-    payload = {"action": "rediscover", "devices": [{"deviceIP": "172.16.248.105"}, {"deviceIP": "172.16.248.106"}]}
-    run_api(obj, 'device/action/rediscover', payload=payload, method='post')    # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
-    payload = {
-        'domain-id': '1',
-        'org': 'TEST',
-        'password': 'insight',
-    }
-    run_api(obj, 'settings/configuration/organization', payload=payload, method='put')
-    # Example request to make a Post call to the vmanage
-    # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
-    payload = {
-        'domainIp': '2.2.2.2',
-        'port': 12346
-    }
-    run_api(obj, 'settings/configuration/device', payload, method='put')
-    # Example request to make a Post call to the vmanage
-    # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
-    payload = {
-        'certificateSigning': 'enterprise'
-    }
-    run_api(obj, 'settings/configuration/certificate', payload, method='post')
-    # Example request to make a Post call to the vmanage
-    # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
-    payload = {
-        'enterpriseRootCA': ca
-    }
-    run_api(obj, 'settings/configuration/certificate/enterpriserootca', payload, method='put')
-    # Example request to make a Post call to the vmanage
-    # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
-
-
-    files = [
-        ("file", ("DEFAULT - 155893.viptela", open("C:/Users/Tony Curtis/Desktop/DEFAULT - 155893.viptela", "rb"),
-                  "application/octet-stream"))
-    ]
-    payload = [{"validity": "valid", "upload": True}]
-    response = run_api(obj, 'system/device/fileupload', payload, files=files, method='post',
-            headers=None)
-
-    print(response.text)
+    # # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
+    # run_api(obj, 'system/device/vedges')
+    # # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
+    # payload = {"action": "rediscover", "devices": [{"deviceIP": "172.16.248.105"}, {"deviceIP": "172.16.248.106"}]}
+    # run_api(obj, 'device/action/rediscover', payload=payload, method='post')    # Example request to get devices from the vmanage "url=https://vmanage.viptela.com/dataservice/device"
+    # payload = {
+    #     'domain-id': '1',
+    #     'org': 'TEST',
+    #     'password': 'insight',
+    # }
+    # run_api(obj, 'settings/configuration/organization', payload=payload, method='put')
+    # # Example request to make a Post call to the vmanage
+    # # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
+    # payload = {
+    #     'domainIp': '2.2.2.2',
+    #     'port': 12346
+    # }
+    # run_api(obj, 'settings/configuration/device', payload, method='put')
+    # # Example request to make a Post call to the vmanage
+    # # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
+    # payload = {
+    #     'certificateSigning': 'enterprise'
+    # }
+    # run_api(obj, 'settings/configuration/certificate', payload, method='post')
+    # # Example request to make a Post call to the vmanage
+    # # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
+    # payload = {
+    #     'enterpriseRootCA': ca
+    # }
+    # run_api(obj, 'settings/configuration/certificate/enterpriserootca', payload, method='put')
+    # # Example request to make a Post call to the vmanage
+    # # "url=https://vmanage.viptela.com/dataservice/device/action/rediscover"
+    #
+    #
+    # files = [
+    #     ("file", ("DEFAULT - 155893.viptela", open("C:/Users/Tony Curtis/Desktop/DEFAULT - 155893.viptela", "rb"),
+    #               "application/octet-stream"))
+    # ]
+    # payload = [{"validity": "valid", "upload": True}]
+    # response = run_api(obj, 'system/device/fileupload', payload, files=files, method='post',
+    #         headers=None)
+    #
+    # print(response.text)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
