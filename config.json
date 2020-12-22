@@ -1,0 +1,67 @@
+{
+    "vsmart":
+        {
+            "name": "vsmart",
+            "port": "32770",
+            "system_ip": "1.1.1.3",
+            "console_host": "",
+            "username": "",
+            "password": "",
+            "preferred_password": "",
+            "vpn0_ip": "51.51.51.3",
+            "is_configured": false,
+            "initial_config_file": "configs/vsmart-initial.txt",
+            "post_config_file": "configs/vsmart-post.txt",
+            "thread_header": "",
+            "vpn512_ip": "",
+            "CSR": "",
+            "CRT": "",
+            "provisioned": false,
+            "ssh_obj": null
+        },
+    "vbond": {
+            "name": "vbond",
+            "port": "32771",
+            "system_ip": "1.1.1.2",
+            "console_host": "",
+            "username": "",
+            "password": "",
+            "preferred_password": "insight",
+            "vpn0_ip": "51.51.51.2",
+            "is_configured": false,
+            "initial_config_file": "configs/vbond-initial.txt",
+            "post_config_file": "configs/vbond-post.txt",
+            "thread_header": "",
+            "vpn512_ip": "",
+            "CSR": "",
+            "CRT": "",
+            "provisioned": false,
+            "ssh_obj": null
+        },
+    "vmanage": {
+        "name": "vmanage",
+        "port": "32769",
+        "system_ip": "1.1.1.1",
+        "console_host": "",
+        "username": "admin",
+        "password": "admin",
+        "preferred_password": "insight",
+        "vpn0_ip": "51.51.51.1",
+        "is_configured": false,
+        "initial_config_file": "configs/vmanage-initial.txt",
+        "thread_header": "",
+        "vpn512_ip": "",
+        "root_ca_cert": "",
+        "CSR": "",
+        "CRT": "",
+        "provisioned": false,
+        "ssh_obj": null
+    },
+    "global": {
+        "eve-ng_host": "172.28.43.171",
+        "DEBUG": true,
+        "default_username": "admin",
+        "default_password": "admin",
+        "preferred_password": "insight"
+    }
+}
